@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 
 from ..contracts import EvalResult, PropellerDesign
+from ..stations import uniform_midpoint
 
 
 def _parse_table(path: Path, n_cols: int) -> np.ndarray:
@@ -73,18 +74,20 @@ def design_from_geometry(
 
     The hub radius is taken as the innermost measured station (the data says
     nothing inboard of it). Chord and twist are linearly interpolated
-    (numpy.interp) onto the solver's uniform station midpoints, which all lie
-    strictly inside the measured [r/R_min, 1] range — no extrapolation occurs.
+    (numpy.interp) onto uniform-midpoint stations (stations.uniform_midpoint,
+    carried on the design as station_r_m), which all lie strictly inside the
+    measured [r/R_min, 1] range — no extrapolation occurs.
     """
     radius = diameter_m / 2.0
     hub = float(geom.r_over_r[0]) * radius
-    dr = (radius - hub) / n_stations
-    r_mid = (hub + (np.arange(n_stations) + 0.5) * dr) / radius  # as r/R
-    chord = np.interp(r_mid, geom.r_over_r, geom.c_over_r) * radius
-    twist = np.radians(np.interp(r_mid, geom.r_over_r, geom.beta_deg))
+    stations = uniform_midpoint(hub, radius, n_stations)
+    r_norm = np.asarray(stations) / radius  # as r/R
+    chord = np.interp(r_norm, geom.r_over_r, geom.c_over_r) * radius
+    twist = np.radians(np.interp(r_norm, geom.r_over_r, geom.beta_deg))
     return PropellerDesign(radius, hub, n_blades, rpm,
                            tuple(float(c) for c in chord),
-                           tuple(float(t) for t in twist))
+                           tuple(float(t) for t in twist),
+                           stations)
 
 
 def thrust_power_coefficients(ev: EvalResult, rpm: float, diameter_m: float,

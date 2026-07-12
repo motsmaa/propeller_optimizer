@@ -5,6 +5,7 @@ import pytest
 
 from propopt.contracts import PropellerDesign, SolverError
 from propopt.solvers.bemt import BEMTAeroSolver, analytic_polar
+from propopt.stations import uniform_midpoint
 from propopt.units import RHO_AIR
 
 N_STATIONS = 6
@@ -16,7 +17,8 @@ def make_design(rpm: float = 5000.0, n_blades: int = 2, radius_m: float = 0.127,
     r_norm = np.linspace(0.5 / N_STATIONS, 1 - 0.5 / N_STATIONS, N_STATIONS)
     chord = tuple(0.025 - 0.013 * ri for ri in r_norm)
     twist = tuple(float(np.arctan(pitch / (np.pi * ri))) for ri in r_norm)
-    return PropellerDesign(radius_m, hub_radius_m, n_blades, rpm, chord, twist)
+    return PropellerDesign(radius_m, hub_radius_m, n_blades, rpm, chord, twist,
+                           uniform_midpoint(hub_radius_m, radius_m, N_STATIONS))
 
 
 def test_reasonable_design_is_sane():
@@ -45,10 +47,13 @@ def test_never_beats_actuator_disk_ideal():
                 assert ev.figure_of_merit < 1.0
 
 
-def test_degenerate_hub_raises_solver_error():
-    d = make_design(hub_radius_m=0.127)  # hub == tip: zero-span blade
-    with pytest.raises(SolverError):
-        BEMTAeroSolver().evaluate(d)
+def test_degenerate_hub_rejected_at_construction():
+    """hub == tip (zero-span blade) can no longer reach the solver: the
+    station contract (strictly increasing station_r_m) rejects it when the
+    design is built. Solver-level SolverError degeneracy is still covered by
+    the tip-Mach and non-convergence tests below and by geometry tests."""
+    with pytest.raises(ValueError):
+        make_design(hub_radius_m=0.127)  # uniform stations collapse to a point
 
 
 def test_excessive_tip_mach_raises_solver_error():

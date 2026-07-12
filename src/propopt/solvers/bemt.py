@@ -34,6 +34,7 @@ from typing import Callable
 import numpy as np
 
 from ..contracts import AeroSolver, EvalResult, PropellerDesign, SolverError
+from ..stations import station_weights
 from ..units import RHO_AIR
 
 MU_AIR = 1.81e-5        # Pa*s, dynamic viscosity of air at ~15 C
@@ -114,10 +115,11 @@ class BEMTAeroSolver(AeroSolver):
             raise SolverError(f"tip Mach {tip_mach:.2f} exceeds {MAX_TIP_MACH} "
                               "(incompressible BEMT invalid)")
 
-        # station midpoints, root -> tip (matches the struct solver's dr)
-        n = len(chord)
-        dr = (radius - hub) / n
-        r = hub + (np.arange(n) + 0.5) * dr
+        # shared station placement (contract field) + quadrature cell widths:
+        # each station owns the cell between neighbouring midpoints clipped to
+        # [hub, R], so aero integrates over exactly [hub, R]
+        r = np.asarray(design.station_r_m, dtype=float)
+        w_r = station_weights(r, hub, radius)
         ut = omega * r                      # blade-section tangential speed
         v_scale = omega * radius            # velocity scale for tolerance
 
@@ -154,8 +156,8 @@ class BEMTAeroSolver(AeroSolver):
         cl, cd = self._polar(theta - phi, rho * w * chord / MU_AIR)
         sin_phi, cos_phi = np.sin(phi), np.cos(phi)
         q_local = 0.5 * rho * w ** 2 * n_blades * chord
-        thrust = float(np.sum(q_local * (cl * cos_phi - cd * sin_phi) * dr))
-        torque = float(np.sum(q_local * (cl * sin_phi + cd * cos_phi) * r * dr))
+        thrust = float(np.sum(q_local * (cl * cos_phi - cd * sin_phi) * w_r))
+        torque = float(np.sum(q_local * (cl * sin_phi + cd * cos_phi) * r * w_r))
         power = torque * omega
         if not (np.isfinite(thrust) and np.isfinite(torque) and power > 0.0):
             raise SolverError("non-physical integrated loads (T/Q/P)")

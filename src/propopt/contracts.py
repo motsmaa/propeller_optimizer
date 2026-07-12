@@ -27,6 +27,13 @@ class PropellerDesign:
     rpm: float
     chord_m: tuple[float, ...]    # per radial station, root -> tip
     twist_rad: tuple[float, ...]  # per radial station, root -> tip
+    station_r_m: tuple[float, ...]  # radial position of each station (m),
+                                    # strictly increasing, within
+                                    # [hub_radius_m, radius_m]. The single
+                                    # shared source of station placement for
+                                    # aero, geometry and structure. Spacing
+                                    # SCHEMES (uniform-midpoint, cosine, ...)
+                                    # live in problem_spec/stations, not here.
 
     def __post_init__(self) -> None:
         require_positive("radius_m", self.radius_m)
@@ -37,6 +44,15 @@ class PropellerDesign:
             raise ValueError("chord_m and twist_rad must have equal length")
         if not self.chord_m:
             raise ValueError("design must have at least one radial station")
+        if len(self.station_r_m) != len(self.chord_m):
+            raise ValueError("station_r_m and chord_m must have equal length")
+        r = self.station_r_m
+        for v in r:
+            require_finite("station_r_m", v)
+        if any(b <= a for a, b in zip(r, r[1:])):
+            raise ValueError("station_r_m must be strictly increasing")
+        if r[0] < self.hub_radius_m or r[-1] > self.radius_m:
+            raise ValueError("station_r_m must lie within [hub_radius_m, radius_m]")
 
 
 @dataclass(frozen=True)

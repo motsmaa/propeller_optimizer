@@ -10,11 +10,13 @@ from propopt.contracts import (
     StructSolver,
 )
 from propopt.solvers.null import NullAeroSolver, NullStructSolver
+from propopt.stations import uniform_midpoint
 from propopt.units import SanityError
 
 
 def _design() -> PropellerDesign:
-    return PropellerDesign(0.127, 0.01, 2, 8000.0, (0.02, 0.018, 0.015), (0.3, 0.2, 0.1))
+    return PropellerDesign(0.127, 0.01, 2, 8000.0, (0.02, 0.018, 0.015), (0.3, 0.2, 0.1),
+                           uniform_midpoint(0.01, 0.127, 3))
 
 
 def test_design_is_frozen():
@@ -25,7 +27,22 @@ def test_design_is_frozen():
 
 def test_design_validates_lengths():
     with pytest.raises(ValueError):
-        PropellerDesign(0.127, 0.01, 2, 8000.0, (0.02, 0.018), (0.3,))
+        PropellerDesign(0.127, 0.01, 2, 8000.0, (0.02, 0.018), (0.3,),
+                        uniform_midpoint(0.01, 0.127, 2))
+
+
+def test_design_validates_stations():
+    chord, twist = (0.02, 0.018, 0.015), (0.3, 0.2, 0.1)
+    with pytest.raises(ValueError):  # length mismatch
+        PropellerDesign(0.127, 0.01, 2, 8000.0, chord, twist, (0.03, 0.08))
+    with pytest.raises(ValueError):  # not strictly increasing
+        PropellerDesign(0.127, 0.01, 2, 8000.0, chord, twist, (0.03, 0.03, 0.08))
+    with pytest.raises(ValueError):  # outside [hub, radius]
+        PropellerDesign(0.127, 0.01, 2, 8000.0, chord, twist, (0.005, 0.05, 0.10))
+    with pytest.raises(ValueError):
+        PropellerDesign(0.127, 0.01, 2, 8000.0, chord, twist, (0.03, 0.05, 0.13))
+    with pytest.raises(SanityError):  # non-finite
+        PropellerDesign(0.127, 0.01, 2, 8000.0, chord, twist, (0.03, float("nan"), 0.10))
 
 
 def test_abcs_cannot_instantiate():

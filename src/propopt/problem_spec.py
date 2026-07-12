@@ -17,8 +17,10 @@ from typing import Callable
 import numpy as np
 
 from .contracts import EvalResult, PropellerDesign, StructResult
+from .stations import uniform_midpoint
 
 ObjFn = Callable[[EvalResult, StructResult], float]
+SpacingFn = Callable[[float, float, int], tuple[float, ...]]  # (hub, tip, n) -> radii
 
 
 class Sense(Enum):
@@ -84,12 +86,16 @@ def radial_spec(
     twist_bounds: tuple[float, float] = (0.0, 0.6),
     rpm_bounds: tuple[float, float] = (2000.0, 12000.0),
     min_thrust_N: float = 2.0,
+    spacing: SpacingFn = uniform_midpoint,
 ) -> ProblemSpec:
     """Radial-station spec. Genome: [chord_0..chord_{n-1}, twist_0..twist_{n-1}, rpm].
 
+    Station radii are fixed per spec by the `spacing` scheme (see stations.py)
+    and carried on every decoded design via PropellerDesign.station_r_m.
     Objectives: max thrust, max FoM, min mass, max safety factor.
     Constraints: safety_factor >= 1, thrust >= min_thrust_N.
     """
+    station_r = spacing(hub_radius_m, radius_m, n_stations)
     n_var = 2 * n_stations + 1
     xl = np.concatenate([
         np.full(n_stations, chord_bounds[0]),
@@ -106,7 +112,8 @@ def radial_spec(
         chord = tuple(float(v) for v in x[:n_stations])
         twist = tuple(float(v) for v in x[n_stations:2 * n_stations])
         rpm = float(x[-1])
-        return PropellerDesign(radius_m, hub_radius_m, n_blades, rpm, chord, twist)
+        return PropellerDesign(radius_m, hub_radius_m, n_blades, rpm, chord, twist,
+                               station_r)
 
     objectives = (
         Objective("thrust_N", Sense.MAX, lambda ev, st: ev.thrust_N),

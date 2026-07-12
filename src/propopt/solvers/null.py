@@ -17,6 +17,7 @@ from ..contracts import (
     StructResult,
     StructSolver,
 )
+from ..stations import station_weights
 
 RPM_REF = 12000.0      # normalisation reference
 CHORD_REF = 0.030      # normalisation reference (m)
@@ -42,10 +43,9 @@ class NullAeroSolver(AeroSolver):
 class NullStructSolver(StructSolver):
     def evaluate(self, design: PropellerDesign) -> StructResult:
         chord = np.asarray(design.chord_m)
-        span = design.radius_m - design.hub_radius_m
-        dr = span / len(chord)
+        w_r = station_weights(design.station_r_m, design.hub_radius_m, design.radius_m)
         thickness = 0.12 * chord
-        mass = float(MAT_DENSITY * np.sum(chord * thickness * dr) * design.n_blades)
+        mass = float(MAT_DENSITY * np.sum(chord * thickness * w_r) * design.n_blades)
 
         c = float(chord.mean()) / CHORD_REF
         n = design.rpm / RPM_REF
