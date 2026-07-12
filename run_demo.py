@@ -1,12 +1,13 @@
-"""Phase 0 demonstrator: NSGA-II + null evaluators -> Pareto front summary."""
+"""Phase 1 demonstrator: NSGA-II + BEMT aero (+ null struct) -> Pareto front summary."""
 from propopt.optimize import optimize
 from propopt.problem_spec import radial_spec
-from propopt.solvers.null import NullAeroSolver, NullStructSolver
+from propopt.solvers.bemt import BEMTAeroSolver
+from propopt.solvers.null import NullStructSolver
 
 
 def main() -> None:
     spec = radial_spec()
-    res = optimize(spec, NullAeroSolver(), NullStructSolver(),
+    res = optimize(spec, BEMTAeroSolver(), NullStructSolver(),
                    pop_size=60, n_gen=40, seed=0)
     print(f"Pareto points: {len(res)}   failed evals: {res.n_failed}")
     for i, name in enumerate(spec.obj_names):
