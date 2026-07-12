@@ -87,13 +87,27 @@ def radial_spec(
     rpm_bounds: tuple[float, float] = (2000.0, 12000.0),
     min_thrust_N: float = 2.0,
     spacing: SpacingFn = uniform_midpoint,
+    resonance_margin_min: float = 0.15,
 ) -> ProblemSpec:
     """Radial-station spec. Genome: [chord_0..chord_{n-1}, twist_0..twist_{n-1}, rpm].
 
     Station radii are fixed per spec by the `spacing` scheme (see stations.py)
     and carried on every decoded design via PropellerDesign.station_r_m.
     Objectives: max thrust, max FoM, min mass, max safety factor.
-    Constraints: safety_factor >= 1, thrust >= min_thrust_N.
+    Constraints: safety_factor >= 1, thrust >= min_thrust_N,
+    resonance_margin >= resonance_margin_min.
+
+    `resonance_margin_min` = 0.15 is a DELIBERATELY CONSERVATIVE first-pass
+    value: the first-pass beam f1 estimate is itself uncertain (isotropic
+    PLA, rigid hub, no fillet), so the keep-out band is wide on purpose —
+    revisit when Phase-4 FEA calibrates the modal model.
+
+    A2 COUPLING (known interaction, unresolved on purpose): rpm is currently
+    a free design variable, so the optimizer can satisfy this constraint by
+    shifting rpm (moving the blade-passing excitation) rather than by
+    stiffening the structure. Resolve together with the A2 rpm-vs-motor-
+    equilibrium decision; do not read structural meaning into rpm placement
+    until then.
     """
     station_r = spacing(hub_radius_m, radius_m, n_stations)
     n_var = 2 * n_stations + 1
@@ -124,5 +138,7 @@ def radial_spec(
     constraints = (
         Constraint("safety_factor>=1", lambda ev, st: 1.0 - st.safety_factor),
         Constraint("thrust>=min", lambda ev, st: min_thrust_N - ev.thrust_N),
+        Constraint("resonance_margin>=min",
+                   lambda ev, st: resonance_margin_min - st.resonance_margin),
     )
     return ProblemSpec(n_var, xl, xu, decode, objectives, constraints)

@@ -15,6 +15,7 @@ src/propopt/
   solvers/bemt.py   Phase 1: static/hover BEMT aero, swappable polar seam
   solvers/polars.py TabulatedPolar: Re-interpolating XFOIL table polar
   solvers/geom_mass.py  Phase 2a: real mass from the lofted solid, placeholder SF
+  solvers/beam.py   Phase 2b: rotating-cantilever beam FE (static + modal), real SF
   geometry.py       Phase 2a: design -> verified-watertight triangulated blade solid
   validation/       UIUC propeller-DB parsers (validation only)
 data/               raw measured/XFOIL datasets, unmodified + SOURCE.md provenance
@@ -149,3 +150,78 @@ Phase-2a assumptions and deliberate semantics:
   geometrically-impossible designs at construction (`ValueError`, e.g.
   hub == tip / non-increasing stations); solvers reject contract-valid but
   physically-unsolvable ones (`SolverError`, penalized by the optimizer).
+
+## Phase 2b (in progress): reduced structural solver
+`solvers/beam.py` replaces the null safety factor with a rotating-cantilever
+1-D beam FE on the shared stations (Euler-Bernoulli / Hermite elements,
+numpy-only): centrifugal tension (stressing + stress-stiffening), static
+bending from the BEMT per-blade spanwise loads (`BEMTAeroSolver.
+spanwise_loads`, the aero->structure seam), extreme-fiber stress with a
+documented root stress-concentration guard (Kt=2.5, conservative placeholder
+until Phase-4 FEA calibrates it), SF = yield/peak. Modal: first flapwise
+frequency with centrifugal stiffening + resonance margin vs blade-passing
+harmonics (currently REPORTED only; contract extension pending approval).
+Material is an explicit parameter — default PLA (E=3.5 GPa, yield=50 MPa,
+rho=1240 kg/m^3, typical filament-datasheet values); printed-PLA anisotropy
+is a documented isotropic first-pass simplification. Anchors
+(`tests/test_beam.py`): FE matches closed-form tip deflection (qL^4/8EI,
+nodally exact), centrifugal root tension (exact), and the uniform-cantilever
+first frequency (3.516 sqrt(EI/m L^4), rel 1e-4); f1 rises with rpm; SF falls
+with rpm and rises with chord; beam mass equals the lofted-solid mass exactly
+untwisted (<=5% twisted, measured ~3.7% worst). All four objectives are now
+physical; with real PLA strength the demo's max feasible thrust drops from
+~46 N to ~13 N and the optimizer rides the SF=1 boundary.
+
+**Resonance constraint (landed):** `StructResult` carries `first_freq_hz`
+and `resonance_margin`; `radial_spec` enforces
+`resonance_margin >= resonance_margin_min` (default **0.15** — deliberately
+conservative because the first-pass beam f1 is itself uncertain: isotropic
+PLA, rigid hub, no fillet; revisit when Phase-4 FEA calibrates the modal
+model). Without it the optimizer parked 14/60 front designs inside the
+keep-out band (min margin 0.004); with it, 0/60 (min 0.170) at essentially
+unchanged thrust. **A2 coupling (known, unresolved):** rpm is a free design
+variable, so the optimizer satisfies resonance mainly by shifting rpm — the
+front's rpm range compressed from 3358-8403 to 3803-7798 under the
+constraint. Do not read structural meaning into rpm placement until A2 is
+decided. Null/geom-mass solvers carry documented ABSURD sentinels for the
+modal fields (f1 = 1e9 Hz, margin = 1e6): unmistakably fake on inspection,
+non-binding so plumbing tests keep working.
+
+**Mass-discrepancy verdict (investigated):** the <=3.7% beam-vs-geometry
+mass difference on twisted blades is a genuine geometry effect, not an
+integration inconsistency. The mass objective is computed on the FACETED
+TRIANGULATED LOFT (the actual printable artifact), which is therefore a
+slight CONSERVATIVE OVER-ESTIMATE of the smooth-blade mass — the triangles
+chording the non-planar quads between rotated twisted sections enclose
+marginally more volume than the smooth extrusion. The beam model instead
+tracks the smooth ∫A dr limit, which is exactly twist-invariant. These are
+two legitimately different shapes: the effect is exactly zero untwisted,
+scales as O(dtheta^2) per element, and vanishes under station refinement.
+KNOWN AND EXPECTED, not a bug — documented here and in
+`tests/test_beam.py::test_mass_consistency_with_geometry`.
+
+### Phase-3 priority: resolve A2 before trusting the resonance margin
+The resonance constraint (above) is satisfiable two ways: stiffen the blade,
+or move the excitation frequency by changing rpm. With rpm still a free
+design variable (A2 unresolved), NSGA-II took the cheap path. Quantified
+evidence from this checkpoint's demo run (`radial_spec` default settings,
+seed 0, 60/60 front): enabling the constraint left thrust/FoM/mass/SF
+ranges essentially unchanged, while the front's rpm distribution visibly
+compressed away from resonance-prone rpm —
+the 8,000-10,000 rpm bucket emptied (5 designs -> 0) and the front median
+shifted from 6940 to 6552 rpm. In other words, the constraint currently
+buys safety margin at ~zero objective cost by exploiting a free variable
+that Phase 3 is expected to remove. **Once A2 is decided (rpm solved from a
+motor-prop torque equilibrium instead of free), re-run this comparison: the
+resonance constraint will very likely start biting structurally (forcing
+stiffer/heavier blades) instead of being satisfied by rpm choice alone.**
+Treat any resonance-margin numbers produced before A2 is resolved as
+optimistic.
+
+**Resonance model scope limits (documented, not solved):** the margin checks
+only blade-passing harmonics n=1..3 against the first flapwise mode. There is
+no 1P/shaft-order excitation term, no forward-flight forcing (consistent with
+BEMT's static/hover scope), and no damping or forced-response amplitude
+estimate — it is a frequency keep-out band, not a vibration prediction. A
+full Campbell diagram (multiple modes, all excitation orders, vs. rpm) is
+Phase-4 material once solid FEA is in the loop.

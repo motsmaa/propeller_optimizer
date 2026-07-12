@@ -23,6 +23,18 @@ RPM_REF = 12000.0      # normalisation reference
 CHORD_REF = 0.030      # normalisation reference (m)
 MAT_DENSITY = 1240.0   # kg/m^3, ~PLA placeholder
 
+# MEANINGLESS SENTINELS for the modal fields the null solver cannot compute.
+# Chosen absurdly large (a GHz blade mode, a resonance margin of a million)
+# so that (1) no report or plot could mistake them for physical values, and
+# (2) the resonance constraint never binds on the null path — the null
+# solvers exist to test optimizer plumbing, and a binding fake constraint
+# would make every null run infeasible and useless. The trade-off is that
+# accidentally wiring the null solver into a resonance study will not trip
+# the constraint; the absurd magnitude (1e9 Hz) is the tell — inspect f1 in
+# any output before trusting margins.
+SENTINEL_F1_HZ = 1.0e9
+SENTINEL_MARGIN = 1.0e6
+
 
 class NullAeroSolver(AeroSolver):
     def evaluate(self, design: PropellerDesign) -> EvalResult:
@@ -51,4 +63,5 @@ class NullStructSolver(StructSolver):
         n = design.rpm / RPM_REF
         sf = 6.0 * c / (0.05 + n ** 2)                # more material up, more rpm down
         stress = 2.0e8 * n ** 2 / (c + 1e-3)
-        return StructResult(mass, max(sf, 1e-3), stress)
+        return StructResult(mass, max(sf, 1e-3), stress,
+                            SENTINEL_F1_HZ, SENTINEL_MARGIN)

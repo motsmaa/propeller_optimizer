@@ -93,7 +93,12 @@ class BEMTAeroSolver(AeroSolver):
         self._rtol = rtol
         self._relax = relax
 
-    def evaluate(self, design: PropellerDesign) -> EvalResult:
+    def _converged_state(self, design: PropellerDesign):
+        """Validate the design, run the fixed-point iteration, and return the
+        converged station state (r, w_r, q_local, cl, cd, sin_phi, cos_phi,
+        omega). Shared verbatim by evaluate() and spanwise_loads() — the
+        arithmetic and its order are identical to the pre-extraction
+        evaluate(), guarded by the bit-level regression pin."""
         rho = self._rho
         radius, hub = design.radius_m, design.hub_radius_m
         n_blades = design.n_blades
@@ -150,19 +155,24 @@ class BEMTAeroSolver(AeroSolver):
         else:
             raise SolverError(f"BEMT did not converge in {self._max_iter} iterations")
 
-        # -- converged state: integrate blade-element forces --
+        # -- converged state --
         phi = np.arctan2(v, ut)
         w = np.hypot(v, ut)
         cl, cd = self._polar(theta - phi, rho * w * chord / MU_AIR)
         sin_phi, cos_phi = np.sin(phi), np.cos(phi)
         q_local = 0.5 * rho * w ** 2 * n_blades * chord
+        return r, w_r, q_local, cl, cd, sin_phi, cos_phi, omega
+
+    def evaluate(self, design: PropellerDesign) -> EvalResult:
+        r, w_r, q_local, cl, cd, sin_phi, cos_phi, omega = self._converged_state(design)
         thrust = float(np.sum(q_local * (cl * cos_phi - cd * sin_phi) * w_r))
         torque = float(np.sum(q_local * (cl * sin_phi + cd * cos_phi) * r * w_r))
         power = torque * omega
         if not (np.isfinite(thrust) and np.isfinite(torque) and power > 0.0):
             raise SolverError("non-physical integrated loads (T/Q/P)")
 
-        disk_area = np.pi * radius ** 2
+        disk_area = np.pi * design.radius_m ** 2
+        rho = self._rho
         if thrust > 0.0:
             fom = thrust ** 1.5 / (np.sqrt(2.0 * rho * disk_area) * power)
         else:
@@ -171,3 +181,14 @@ class BEMTAeroSolver(AeroSolver):
             raise SolverError(f"figure of merit {fom:.3f} >= 1 beats the "
                               "actuator-disk ideal — solver inconsistency")
         return EvalResult(thrust, torque, power, fom)
+
+    def spanwise_loads(self, design: PropellerDesign) -> tuple[np.ndarray, np.ndarray]:
+        """PER-BLADE spanwise force distributions at the shared stations, N/m:
+        (thrust_per_length, tangential_per_length). Same converged BEMT state
+        as evaluate() — this is the aero->structure load seam consumed by the
+        Phase-2b beam solver. Tangential is the in-plane (torque-producing)
+        component; torque integrand is tangential_per_length * r."""
+        _, _, q_local, cl, cd, sin_phi, cos_phi, _ = self._converged_state(design)
+        per_blade = q_local / design.n_blades
+        return (per_blade * (cl * cos_phi - cd * sin_phi),
+                per_blade * (cl * sin_phi + cd * cos_phi))

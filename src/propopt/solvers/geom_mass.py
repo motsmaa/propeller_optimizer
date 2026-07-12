@@ -25,4 +25,7 @@ class GeometryMassStructSolver(StructSolver):
         solid = solid_from_design(design, self._section, self._n_chord)
         mass = design.n_blades * solid.volume_m3 * self._density
         placeholder = self._null.evaluate(design)
-        return StructResult(mass, placeholder.safety_factor, placeholder.max_stress_Pa)
+        # modal fields pass through the null solver's documented sentinels —
+        # this solver has no modal model either
+        return StructResult(mass, placeholder.safety_factor, placeholder.max_stress_Pa,
+                            placeholder.first_freq_hz, placeholder.resonance_margin)

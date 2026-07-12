@@ -14,7 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from .units import require_finite, require_fraction, require_positive
+from .units import require_finite, require_fraction, require_nonneg, require_positive
 
 
 @dataclass(frozen=True)
@@ -78,11 +78,16 @@ class StructResult:
     mass_kg: float
     safety_factor: float  # dimensionless
     max_stress_Pa: float
+    first_freq_hz: float      # first (flapwise) natural frequency at design rpm
+    resonance_margin: float   # min_n |f1 - n*BPF| / (n*BPF) over the first few
+                              # blade-passing harmonics; 0 = on resonance
 
     def __post_init__(self) -> None:
         require_positive("mass_kg", self.mass_kg)
         require_positive("safety_factor", self.safety_factor)
         require_finite("max_stress_Pa", self.max_stress_Pa)
+        require_positive("first_freq_hz", self.first_freq_hz)
+        require_nonneg("resonance_margin", self.resonance_margin)
 
 
 class SolverError(Exception):

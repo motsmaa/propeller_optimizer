@@ -69,4 +69,10 @@ def test_sanity_rejects_bad_values():
     with pytest.raises(SanityError):
         EvalResult(1.0, 1.0, 1.0, 1.5)  # FoM out of [0, 1]
     with pytest.raises(SanityError):
-        StructResult(-1.0, 2.0, 1e6)    # negative mass
+        StructResult(-1.0, 2.0, 1e6, 100.0, 0.5)    # negative mass
+    with pytest.raises(SanityError):
+        StructResult(0.01, 2.0, 1e6, 0.0, 0.5)      # first frequency must be > 0
+    with pytest.raises(SanityError):
+        StructResult(0.01, 2.0, 1e6, 100.0, -0.1)   # margin must be >= 0
+    ok = StructResult(0.01, 2.0, 1e6, 100.0, 0.0)   # on-resonance is representable
+    assert ok.resonance_margin == 0.0
