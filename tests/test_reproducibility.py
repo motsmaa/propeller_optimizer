@@ -6,7 +6,7 @@ from propopt.solvers.null import NullAeroSolver, NullStructSolver
 
 
 def _run(seed: int):
-    spec = radial_spec()
+    spec = radial_spec(motor=None)  # free-rpm plumbing test (pre-motor)
     return optimize(spec, NullAeroSolver(), NullStructSolver(),
                     pop_size=40, n_gen=20, seed=seed)
 

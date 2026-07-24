@@ -30,7 +30,7 @@ def _random_designs(n_per_spec: int = 50, seed: int = 0):
     """The shared random-genome sweep: in-bounds designs across station counts."""
     rng = np.random.default_rng(seed)
     for n_stations in (4, 6, 8, 10):
-        spec = radial_spec(n_stations=n_stations)
+        spec = radial_spec(n_stations=n_stations, motor=None)  # geometry ignores rpm
         for _ in range(n_per_spec):
             x = spec.xl + rng.random(spec.n_var) * (spec.xu - spec.xl)
             yield n_stations, spec.decode(x)

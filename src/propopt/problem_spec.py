@@ -16,7 +16,8 @@ from typing import Callable
 
 import numpy as np
 
-from .contracts import EvalResult, PropellerDesign, StructResult
+from .contracts import AeroSolver, EvalResult, PropellerDesign, StructResult
+from .motor import DEFAULT_MOTOR, MotorSpec, solve_torque_equilibrium
 from .stations import uniform_midpoint
 
 ObjFn = Callable[[EvalResult, StructResult], float]
@@ -88,46 +89,83 @@ def radial_spec(
     min_thrust_N: float = 2.0,
     spacing: SpacingFn = uniform_midpoint,
     resonance_margin_min: float = 0.15,
+    motor: MotorSpec | None = DEFAULT_MOTOR,
+    aero_for_rpm: AeroSolver | None = None,
+    throttle_bounds: tuple[float, float] = (0.2, 1.0),
 ) -> ProblemSpec:
-    """Radial-station spec. Genome: [chord_0..chord_{n-1}, twist_0..twist_{n-1}, rpm].
+    """Radial-station spec.
 
-    Station radii are fixed per spec by the `spacing` scheme (see stations.py)
-    and carried on every decoded design via PropellerDesign.station_r_m.
+    Phase 2c — MOTOR MODE (default, `motor` set): the last genome slot is
+    THROTTLE in [throttle_min, 1]; rpm is solved per design as the
+    motor-propeller torque equilibrium (see motor.py) inside `decode`, using
+    `aero_for_rpm` (a BEMTAeroSolver by default) for Q_prop. Genome:
+    [chord_0..n-1, twist_0..n-1, throttle].
+
+    FREE-RPM MODE (`motor=None`): the pre-2c behaviour — the last slot is rpm
+    in `rpm_bounds`, sampled directly. Kept for optimizer-plumbing/geometry
+    tests that predate the motor model. Genome: [..., rpm].
+
+    Station radii are fixed per spec by `spacing` (stations.py) and carried on
+    every decoded design via PropellerDesign.station_r_m.
     Objectives: max thrust, max FoM, min mass, max safety factor.
     Constraints: safety_factor >= 1, thrust >= min_thrust_N,
-    resonance_margin >= resonance_margin_min.
+    resonance_margin >= resonance_margin_min, and (motor mode only)
+    motor current at equilibrium <= I_max.
+
+    `throttle_min` = 0.2: below ~20% throttle the first-order motor model is
+    least trustworthy (ESC PWM, cogging, back-EMF sensing all degrade) and the
+    delivered thrust is negligible; it also keeps the equilibrium comfortably
+    above the BEMT low-rpm floor.
 
     `resonance_margin_min` = 0.15 is a DELIBERATELY CONSERVATIVE first-pass
     value: the first-pass beam f1 estimate is itself uncertain (isotropic
     PLA, rigid hub, no fillet), so the keep-out band is wide on purpose —
     revisit when Phase-4 FEA calibrates the modal model.
 
-    A2 COUPLING (known interaction, unresolved on purpose): rpm is currently
-    a free design variable, so the optimizer can satisfy this constraint by
-    shifting rpm (moving the blade-passing excitation) rather than by
-    stiffening the structure. Resolve together with the A2 rpm-vs-motor-
-    equilibrium decision; do not read structural meaning into rpm placement
-    until then.
+    A2 RESOLUTION (Path 2): with `motor` set, rpm is no longer a free lever the
+    optimizer can slide to satisfy the resonance constraint — it must earn
+    resonance margin structurally (stiffen the blade) or by trading throttle
+    (which also moves thrust). Throttle is the new operating relief valve;
+    run_demo reports its distribution as the analogue of the pre-2c
+    rpm-distribution diagnostic.
     """
     station_r = spacing(hub_radius_m, radius_m, n_stations)
     n_var = 2 * n_stations + 1
+    last_bounds = throttle_bounds if motor is not None else rpm_bounds
     xl = np.concatenate([
         np.full(n_stations, chord_bounds[0]),
         np.full(n_stations, twist_bounds[0]),
-        [rpm_bounds[0]],
+        [last_bounds[0]],
     ])
     xu = np.concatenate([
         np.full(n_stations, chord_bounds[1]),
         np.full(n_stations, twist_bounds[1]),
-        [rpm_bounds[1]],
+        [last_bounds[1]],
     ])
+
+    aero_rpm = aero_for_rpm
+    if motor is not None and aero_rpm is None:
+        from .solvers.bemt import BEMTAeroSolver  # local: avoid import cycle
+        aero_rpm = BEMTAeroSolver()
+
+    def _build(rpm: float, chord, twist) -> PropellerDesign:
+        return PropellerDesign(radius_m, hub_radius_m, n_blades, rpm, chord, twist,
+                               station_r)
 
     def decode(x: np.ndarray) -> PropellerDesign:
         chord = tuple(float(v) for v in x[:n_stations])
         twist = tuple(float(v) for v in x[n_stations:2 * n_stations])
-        rpm = float(x[-1])
-        return PropellerDesign(radius_m, hub_radius_m, n_blades, rpm, chord, twist,
-                               station_r)
+        if motor is None:
+            return _build(float(x[-1]), chord, twist)
+        throttle = float(x[-1])
+        # Q_prop(N) via the shared aero; SolverError from a non-bracketing
+        # equilibrium (case c) or BEMT non-convergence propagates to decode and
+        # is penalized by the optimizer. Over-current (case b) is NOT rejected
+        # here — the equilibrium exists; the current constraint flags it.
+        def prop_torque(rpm: float) -> float:
+            return aero_rpm.evaluate(_build(rpm, chord, twist)).torque_Nm
+        rpm = solve_torque_equilibrium(motor, throttle, prop_torque)
+        return _build(rpm, chord, twist)
 
     objectives = (
         Objective("thrust_N", Sense.MAX, lambda ev, st: ev.thrust_N),
@@ -141,4 +179,12 @@ def radial_spec(
         Constraint("resonance_margin>=min",
                    lambda ev, st: resonance_margin_min - st.resonance_margin),
     )
+    if motor is not None:
+        # At equilibrium Q_prop == Q_motor, so I follows from ev.torque_Nm
+        # alone — no rpm/design needed, so it fits the bundled (ev, st) seam.
+        constraints += (
+            Constraint("motor_current<=Imax",
+                       lambda ev, st: motor.current_from_torque(ev.torque_Nm)
+                       / motor.i_max_a - 1.0),
+        )
     return ProblemSpec(n_var, xl, xu, decode, objectives, constraints)

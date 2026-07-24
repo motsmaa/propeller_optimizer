@@ -86,12 +86,24 @@ class BEMTAeroSolver(AeroSolver):
         max_iter: int = 500,
         rtol: float = 1e-7,
         relax: float = 0.35,
+        cache: bool = True,
     ) -> None:
         self._polar = polar
         self._rho = rho
         self._max_iter = max_iter
         self._rtol = rtol
         self._relax = relax
+        # 1-slot memo of the last converged state (Phase 2c). The motor
+        # equilibrium root-find, then evaluate(), then beam's spanwise_loads()
+        # all hit BEMT at the SAME final design; sharing one solver instance
+        # lets the two post-equilibrium calls reuse the root-find's last solve.
+        # Equality-checked, so it is CORRECTNESS-safe even under parallel
+        # evaluation (a wrong key just recomputes); it only *helps* under
+        # pymoo's default serial elementwise evaluation. Cached tuples are the
+        # identical objects, so results are bit-for-bit unchanged.
+        self._cache = cache
+        self._cache_key: PropellerDesign | None = None
+        self._cache_val = None
 
     def _converged_state(self, design: PropellerDesign):
         """Validate the design, run the fixed-point iteration, and return the
@@ -99,6 +111,8 @@ class BEMTAeroSolver(AeroSolver):
         omega). Shared verbatim by evaluate() and spanwise_loads() — the
         arithmetic and its order are identical to the pre-extraction
         evaluate(), guarded by the bit-level regression pin."""
+        if self._cache and design == self._cache_key:
+            return self._cache_val
         rho = self._rho
         radius, hub = design.radius_m, design.hub_radius_m
         n_blades = design.n_blades
@@ -161,7 +175,10 @@ class BEMTAeroSolver(AeroSolver):
         cl, cd = self._polar(theta - phi, rho * w * chord / MU_AIR)
         sin_phi, cos_phi = np.sin(phi), np.cos(phi)
         q_local = 0.5 * rho * w ** 2 * n_blades * chord
-        return r, w_r, q_local, cl, cd, sin_phi, cos_phi, omega
+        state = (r, w_r, q_local, cl, cd, sin_phi, cos_phi, omega)
+        if self._cache:
+            self._cache_key, self._cache_val = design, state
+        return state
 
     def evaluate(self, design: PropellerDesign) -> EvalResult:
         r, w_r, q_local, cl, cd, sin_phi, cos_phi, omega = self._converged_state(design)

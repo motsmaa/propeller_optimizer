@@ -8,6 +8,7 @@ frozen interface contracts, before any real physics exists.
 src/propopt/
   contracts.py      PropellerDesign, EvalResult, StructResult, ABCs, SolverError (SI)
   stations.py       station spacing schemes (uniform_midpoint, cosine) + quadrature weights
+  motor.py          Phase 2c: BLDC motor model + torque-equilibrium root-find (Brent)
   units.py          SI conventions + sanity-check assertions
   problem_spec.py   config-driven spec; objectives bundle (name, sense, fn)
   optimize.py       pymoo NSGA-II wiring + failed-eval penalty policy
@@ -96,10 +97,9 @@ blade-datum/twist-convention audit to resolve the section-vs-datum fork in
 (3). Pull this only if a later phase shows BEMT lift accuracy is the binding
 constraint on a decision.
 
-**Open decision (A2, do not implement without discussion):** `rpm` is still a
-free design variable with no motor coupling. The alternative — solving rpm from
-a motor-prop torque equilibrium — changes the genome and possibly the
-`evaluate` signature (explicit operating-condition argument). Deferred.
+**A2 (RESOLVED in Phase 2c, Path 2):** `rpm` was a free design variable with no
+motor coupling. It is now solved from a motor-propeller torque equilibrium;
+throttle is the operating variable in the genome. See "Phase 2c" below.
 
 ## Phase 2a (in progress): parametric geometry
 `geometry.py` lofts a parametric section (seam: `SectionFn`; default NACA
@@ -200,23 +200,17 @@ scales as O(dtheta^2) per element, and vanishes under station refinement.
 KNOWN AND EXPECTED, not a bug — documented here and in
 `tests/test_beam.py::test_mass_consistency_with_geometry`.
 
-### Phase-3 priority: resolve A2 before trusting the resonance margin
-The resonance constraint (above) is satisfiable two ways: stiffen the blade,
-or move the excitation frequency by changing rpm. With rpm still a free
-design variable (A2 unresolved), NSGA-II took the cheap path. Quantified
-evidence from this checkpoint's demo run (`radial_spec` default settings,
-seed 0, 60/60 front): enabling the constraint left thrust/FoM/mass/SF
-ranges essentially unchanged, while the front's rpm distribution visibly
-compressed away from resonance-prone rpm —
-the 8,000-10,000 rpm bucket emptied (5 designs -> 0) and the front median
-shifted from 6940 to 6552 rpm. In other words, the constraint currently
-buys safety margin at ~zero objective cost by exploiting a free variable
-that Phase 3 is expected to remove. **Once A2 is decided (rpm solved from a
-motor-prop torque equilibrium instead of free), re-run this comparison: the
-resonance constraint will very likely start biting structurally (forcing
-stiffer/heavier blades) instead of being satisfied by rpm choice alone.**
-Treat any resonance-margin numbers produced before A2 is resolved as
-optimistic.
+### A2 — RESOLVED in Phase 2c (Path 2): rpm is now solved, not free
+The resonance constraint is satisfiable two ways: stiffen the blade, or move
+the excitation frequency by changing rpm. While rpm was a free design
+variable (A2 open), NSGA-II took the cheap path — enabling the constraint
+compressed the front's rpm distribution (8-10k bucket emptied, median
+6940 -> 6552 rpm) at ~zero objective cost rather than forcing stiffer blades.
+Phase 2c resolves this: rpm LEAVES the genome and is solved from the
+motor-propeller torque equilibrium (see "Phase 2c" below); **throttle**
+(the operating variable the pilot actually commands) replaces it. The
+optimizer can no longer slide rpm independently of a physical motor/blade
+pairing — full before/after evidence is in the Phase 2c section.
 
 **Resonance model scope limits (documented, not solved):** the margin checks
 only blade-passing harmonics n=1..3 against the first flapwise mode. There is
@@ -225,3 +219,60 @@ BEMT's static/hover scope), and no damping or forced-response amplitude
 estimate — it is a frequency keep-out band, not a vibration prediction. A
 full Campbell diagram (multiple modes, all excitation orders, vs. rpm) is
 Phase-4 material once solid FEA is in the loop.
+
+## Phase 2c (checkpoint): motor-propeller torque equilibrium (A2, Path 2)
+`motor.py` adds a first-order brushless-DC model (`MotorSpec`: KV, Rm, I0,
+V_max, I_max) and solves the operating point. rpm LEAVES the genome; the last
+slot becomes **throttle in [0.2, 1]** and `radial_spec.decode` solves the
+speed N where motor torque equals propeller torque
+(`Q_motor(N)=Kt((V-N/KV)/Rm - I0)`, linear decreasing; `Q_prop(N)` from BEMT,
+rising) via a hand-rolled **Brent** root-find on [floor, no-load speed]. rpm
+stays a `PropellerDesign` field (now computed), so contracts.py and
+optimize.py are untouched: the equilibrium runs inside the `decode` closure,
+which binds `MotorSpec` + a shared BEMT solver. `motor=None` restores the
+pre-2c free-rpm genome (used by the plumbing/geometry/resonance tests).
+
+Feasibility (bred away, never crashes): **(b) over-current** — an equilibrium
+exists but the current it draws exceeds I_max — is a bundled `Constraint`
+(g <= 0); at equilibrium `Q_prop == Q_motor`, so the current is recovered
+from `ev.torque_Nm` alone (`I = torque/Kt + I0`), fitting the `(ev, st)` seam
+with no signature change. **(c) no equilibrium** (motor too weak / throttle
+too low to bracket a crossing) raises `SolverError` from `decode` -> penalized
+by the optimizer, same discipline as the BEMT stall path.
+
+Default motor: **2216-class 950 KV on 3S** (Rm 0.10 Ohm, I0 0.6 A, 11.1 V,
+18 A limit) — representative of that datasheet class, not a specific SKU. It
+materially sets the achievable rpm band (no-load ~10.5k rpm) and hence the
+whole front; swapping it is the intended way to study a different power
+system. First-order model OMITS thermal/Rm-drift, magnetic saturation, ESC
+timing/PWM below a few % throttle — the current constraint uses I_max as the
+lumped proxy.
+
+Cost: the root-find calls BEMT (Brent ~6 solves) plus `evaluate` and beam's
+`spanwise_loads`. A 1-slot equality-checked memo on
+`BEMTAeroSolver._converged_state`, with one BEMT instance shared across
+decode/aero/beam, reuses the last solve: **~7 BEMT/candidate with the memo,
+8 without, vs 2 pre-2c** (~3.5x). Anchors (`tests/test_motor.py`): Kt =
+9.5493/KV; zero-prop-torque equilibrium == no-load speed; stall torque; the
+equilibrium against an analytic Q=kN^2 prop matches the hand-solved quadratic
+root (BEMT-independent); efficiency Q.omega/VI < 1; monotonic throttle->N and
+blade->N; over-current and no-equilibrium flagged, not crashed.
+
+**A2 made visible (demo, seed 0, 60/60):** with the motor coupling, **every**
+front design de-rates throttle (0/60 at full throttle; throttle 0.36-0.85,
+median 0.65) — throttle is the relief valve rpm used to be. Equilibrium rpm
+spans 3.3-7.6k (motor-bounded, not the free 2-12k), the current constraint
+BINDS at the high-thrust edge (max 17.9 A vs 18 A limit), and peak feasible
+thrust drops **13.3 N -> 9.4 N** vs the free-rpm front: the motor, not an
+arbitrary rpm choice, now limits thrust. Objective values for over-current
+equilibria assume the ESC could supply the current (it can't) but are excluded
+from the feasible front, so they don't affect results.
+
+**Open Phase-3 question (not decomposed here):** the front is universally
+throttle-de-rated (0/60 at full throttle), but WHICH constraint is doing the
+capping — current, safety factor, or resonance margin — has not been broken
+out per design. The demo shows the current constraint binding at the extreme
+(17.9/18 A) but not whether it, SF, or resonance is the active (binding)
+constraint for most of the front. A per-design constraint-activity breakdown
+(which g(.) is nearest 0 at each Pareto point) is a Phase-3 post-processing
+deliverable, not implemented in this checkpoint.

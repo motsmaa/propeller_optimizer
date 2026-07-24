@@ -26,7 +26,7 @@ class NanAero(AeroSolver):
 
 
 def test_flaky_solver_does_not_crash_and_excludes_failures():
-    spec = radial_spec()
+    spec = radial_spec(motor=None)  # free-rpm: FlakyAero gates on the rpm gene
     res = optimize(spec, FlakyAero(NullAeroSolver()), NullStructSolver(),
                    pop_size=60, n_gen=30, seed=0)
     assert res.n_failed > 0                       # some candidates failed
@@ -35,7 +35,7 @@ def test_flaky_solver_does_not_crash_and_excludes_failures():
 
 
 def test_all_failing_solver_completes_without_raising():
-    spec = radial_spec()
+    spec = radial_spec(motor=None)  # free-rpm: FlakyAero gates on the rpm gene
     res = optimize(spec, NanAero(), NullStructSolver(),
                    pop_size=20, n_gen=10, seed=0)
     assert res.n_failed > 0                        # every eval was caught + penalized

@@ -135,7 +135,7 @@ def test_resonance_constraint_reshapes_front():
     aero = BEMTAeroSolver()
 
     def front_margins(margin_min):
-        spec = radial_spec(resonance_margin_min=margin_min)
+        spec = radial_spec(resonance_margin_min=margin_min, motor=None)
         res = optimize(spec, aero, beam, pop_size=32, n_gen=10, seed=0)
         margins = []
         for x in res.X:
@@ -174,7 +174,7 @@ def test_mass_consistency_with_geometry():
     rng = np.random.default_rng(0)
     checked = 0
     for n_st in (4, 6, 8, 10):
-        spec = radial_spec(n_stations=n_st)
+        spec = radial_spec(n_stations=n_st, motor=None)  # mass is rpm-independent
         for _ in range(25):
             d = spec.decode(spec.xl + rng.random(spec.n_var) * (spec.xu - spec.xl))
             try:

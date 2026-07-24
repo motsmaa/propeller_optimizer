@@ -6,7 +6,7 @@ from propopt.solvers.null import NullAeroSolver, NullStructSolver
 
 
 def test_end_to_end_emits_pareto_front():
-    spec = radial_spec()
+    spec = radial_spec(motor=None)  # free-rpm plumbing test (pre-motor)
     res = optimize(spec, NullAeroSolver(), NullStructSolver(),
                    pop_size=40, n_gen=20, seed=0)
     assert len(res) > 0                      # DoD: a front exists
@@ -17,7 +17,7 @@ def test_end_to_end_emits_pareto_front():
 
 
 def test_front_is_non_degenerate():
-    spec = radial_spec()
+    spec = radial_spec(motor=None)  # free-rpm plumbing test (pre-motor)
     res = optimize(spec, NullAeroSolver(), NullStructSolver(),
                    pop_size=60, n_gen=30, seed=0)
     spreads = res.F.max(axis=0) - res.F.min(axis=0)   # res.F is physical
