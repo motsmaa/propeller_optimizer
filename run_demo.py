@@ -1,68 +1,96 @@
-"""Phase 2c demonstrator: NSGA-II with the motor-propeller torque equilibrium.
+"""Phase 3 entry point: run a config, export the front + plots, print the
+constraint-activity summary. Fully reproducible from config + seed.
 
-rpm is no longer in the genome — throttle is the operating variable, and each
-design's rpm is solved from Q_motor(N) == Q_prop(N) (motor.py) inside decode.
-All four objectives are physical (BEMT thrust/FoM, lofted-solid mass, beam SF).
+    python run_demo.py                     # default config, seed 0
+    python run_demo.py --seed 2 --out runs/s2
+    python run_demo.py --convergence       # + HV-vs-gen seed-variance study (slow)
 
-Reports the THROTTLE distribution across the front (the A2 relief-valve
-analogue of the pre-2c free-rpm diagnostic) and the resulting equilibrium-rpm
-distribution, and contrasts the motor-coupled front with the free-rpm front.
-One shared BEMTAeroSolver is bound into decode, aero, and the beam so the
-equilibrium root-find's final solve is reused (see the memo in bemt.py)."""
-import numpy as np
+Plotting needs the optional 'plot' extra (matplotlib); it degrades gracefully
+with a message if absent. Nothing here is a runtime dependency beyond
+numpy+pymoo.
+"""
+from __future__ import annotations
 
-from propopt.contracts import SolverError
-from propopt.motor import DEFAULT_MOTOR
-from propopt.optimize import optimize
-from propopt.problem_spec import radial_spec
-from propopt.solvers.beam import BeamStructSolver
-from propopt.solvers.bemt import BEMTAeroSolver
+import argparse
+from pathlib import Path
 
+import dataclasses
 
-def _summary(res, spec):
-    for i, name in enumerate(spec.obj_names):
-        col = res.F[:, i]
-        print(f"    {name:16s} min={col.min():10.4g}  max={col.max():10.4g}")
+from propopt.analysis import aggregate_front, analyze_front, seed_variance
+from propopt.config import run
+from propopt.configs.default import decision_config, exploration_config
+from propopt.export import export_front_json, export_selected_stl
 
 
 def main() -> None:
-    aero = BEMTAeroSolver()                 # shared -> memo reuses the root-find solve
-    beam = BeamStructSolver(aero=aero)
-    spec = radial_spec(motor=DEFAULT_MOTOR, aero_for_rpm=aero)
-    res = optimize(spec, aero, beam, pop_size=60, n_gen=40, seed=0)
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--mode", choices=("exploration", "decision"),
+                    default="exploration",
+                    help="exploration = single seed (demos); decision = "
+                         "aggregate >=5 seeds into one cross-seed front")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="override the exploration seed")
+    ap.add_argument("--seeds", type=int, nargs="+", default=None,
+                    help="override the decision-mode / convergence seed list")
+    ap.add_argument("--out", type=Path, default=Path("runs/default"), help="output dir")
+    ap.add_argument("--convergence", action="store_true",
+                    help="run the multi-seed HV-vs-generation study (slow)")
+    args = ap.parse_args()
 
-    print(f"MOTOR-COUPLED front ({DEFAULT_MOTOR.name}):")
-    print(f"  Pareto points: {len(res)}   failed evals: {res.n_failed}")
-    _summary(res, spec)
+    cfg = decision_config() if args.mode == "decision" else exploration_config()
+    if args.seed is not None:
+        cfg = dataclasses.replace(cfg, seed=args.seed)
+    if args.seeds is not None:
+        cfg = dataclasses.replace(cfg, seeds=tuple(args.seeds))
+    args.out.mkdir(parents=True, exist_ok=True)
 
-    throttles, rpms, currents = [], [], []
-    for x in res.X:
-        design = spec.decode(x)             # re-solve equilibrium for reporting
-        try:
-            ev = aero.evaluate(design)
-        except SolverError:
-            continue
-        throttles.append(float(x[-1]))
-        rpms.append(design.rpm)
-        currents.append(DEFAULT_MOTOR.current_from_torque(ev.torque_Nm))
-    throttles, rpms, currents = map(np.array, (throttles, rpms, currents))
-    full = int(np.sum(throttles > 0.99))
-    print(f"  throttle: min={throttles.min():.2f} median={np.median(throttles):.2f} "
-          f"max={throttles.max():.2f};  {full}/{len(throttles)} at full throttle "
-          f"({len(throttles) - full} de-rated)")
-    print(f"  equilibrium rpm: {rpms.min():.0f}-{rpms.max():.0f} "
-          f"(median {np.median(rpms):.0f});  current {currents.min():.1f}-"
-          f"{currents.max():.1f} A (I_max={DEFAULT_MOTOR.i_max_a})")
+    if cfg.mode == "decision":
+        res = aggregate_front(cfg, cfg.seeds)
+        origin = f"decision, {len(cfg.seeds)} seeds {list(cfg.seeds)}"
+    else:
+        res = run(cfg, seed=cfg.seed)
+        origin = f"exploration, seed {cfg.seed}"
+    records, summary = analyze_front(res, cfg, cfg.motor)
+    print(f"Front: {len(records)} designs ({origin}, failed evals {res.n_failed})")
+    for i, name in enumerate(("thrust_N", "figure_of_merit", "mass_kg", "safety_factor")):
+        col = res.F[:, i]
+        print(f"  {name:16s} min={col.min():10.4g}  max={col.max():10.4g}")
 
-    # contrast: pre-2c free-rpm front (rpm is a genome variable)
-    free = radial_spec(motor=None)
-    res_free = optimize(free, BEMTAeroSolver(), BeamStructSolver(),
-                        pop_size=60, n_gen=40, seed=0)
-    print(f"\nFREE-RPM front (pre-2c, rpm in genome): {len(res_free)} points, "
-          f"{res_free.n_failed} failed")
-    _summary(res_free, free)
-    print(f"  thrust max {res_free.F[:, 0].max():.2f} N vs motor-coupled "
-          f"{res.F[:, 0].max():.2f} N")
+    print("\nConstraint activity across the front "
+          f"(binding = |g| within {cfg.binding_tol_frac:.0%} of the constraint scale):")
+    for n, c in summary["constraint_counts"].items():
+        print(f"  {n:22s} binding={c['binding']:3d}  slack={c['slack']:3d}  "
+              f"violated={c['violated']:3d}")
+    if cfg.motor is not None:
+        thr = [r.throttle for r in records]
+        interior = sum(1 for r in records if all(v != "binding" for v in r.activity.values()))
+        print(f"  throttle {min(thr):.2f}-{max(thr):.2f}; "
+              f"{interior}/{len(records)} designs are constraint-interior "
+              "(throttle set by the objective trade-off, not a hard cap).")
+        print(f"  most-binding constraint(s): {summary['dominant_binding'][:2]}")
+
+    convergence = None
+    if args.convergence:
+        print(f"\nConvergence study, seeds {list(cfg.seeds)} "
+              f"(pop {cfg.pop_size} x gen {cfg.n_gen})...")
+        convergence = seed_variance(cfg, cfg.seeds)
+        print(f"  final-HV mean={convergence['final_hv_mean']:.4f} "
+              f"rel-spread={convergence['final_hv_rel_spread']:.1%}  "
+              f"monotonic={all(convergence['monotonic'].values())}")
+
+    json_path = export_front_json(args.out / "front.json", cfg, records, summary, convergence)
+    stls = export_selected_stl(args.out / "stl", cfg, records)
+    print(f"\nWrote {json_path} and {len(stls)} STL(s) under {args.out / 'stl'}")
+
+    try:
+        from propopt.plotting import hv_convergence, parallel_coordinates, scatter_matrix
+        scatter_matrix(records, args.out / "scatter_matrix.png")
+        parallel_coordinates(records, args.out / "parallel_coords.png")
+        if convergence is not None:
+            hv_convergence(convergence, args.out / "hv_convergence.png")
+        print(f"Wrote plots under {args.out}")
+    except Exception as exc:  # PlottingUnavailable or any backend issue
+        print(f"Plots skipped: {exc}")
 
 
 if __name__ == "__main__":

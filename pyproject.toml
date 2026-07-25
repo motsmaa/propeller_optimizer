@@ -9,5 +9,19 @@ description = "Generative propeller design optimizer"
 requires-python = ">=3.10"
 dependencies = ["numpy", "pymoo>=0.6"]
 
+# Optional extras — NOT runtime dependencies. Plotting and the test-only
+# geometry cross-validator degrade gracefully / skip when absent.
+[project.optional-dependencies]
+plot = ["matplotlib"]
+dev = ["matplotlib", "trimesh", "pytest"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+# Slow convergence studies are deselected by default so `pytest -q` stays fast;
+# run them explicitly with `pytest -m slow`.
+addopts = "-m 'not slow'"
+markers = [
+    "slow: multi-seed optimization / convergence studies (deselected by default)",
+]

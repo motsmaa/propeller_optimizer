@@ -9,6 +9,11 @@ src/propopt/
   contracts.py      PropellerDesign, EvalResult, StructResult, ABCs, SolverError (SI)
   stations.py       station spacing schemes (uniform_midpoint, cosine) + quadrature weights
   motor.py          Phase 2c: BLDC motor model + torque-equilibrium root-find (Brent)
+  config.py         Phase 3: RunConfig (frozen) + build_run/run; single source of truth
+  configs/default.py Phase 3: the default RunConfig with justification per value
+  analysis.py       Phase 3: hypervolume convergence + constraint-activity breakdown
+  export.py         Phase 3: front -> JSON, selected designs -> STL
+  plotting.py       Phase 3: scatter-matrix + parallel-coords (optional matplotlib)
   units.py          SI conventions + sanity-check assertions
   problem_spec.py   config-driven spec; objectives bundle (name, sense, fn)
   optimize.py       pymoo NSGA-II wiring + failed-eval penalty policy
@@ -268,11 +273,88 @@ arbitrary rpm choice, now limits thrust. Objective values for over-current
 equilibria assume the ESC could supply the current (it can't) but are excluded
 from the feasible front, so they don't affect results.
 
-**Open Phase-3 question (not decomposed here):** the front is universally
-throttle-de-rated (0/60 at full throttle), but WHICH constraint is doing the
-capping — current, safety factor, or resonance margin — has not been broken
-out per design. The demo shows the current constraint binding at the extreme
-(17.9/18 A) but not whether it, SF, or resonance is the active (binding)
-constraint for most of the front. A per-design constraint-activity breakdown
-(which g(.) is nearest 0 at each Pareto point) is a Phase-3 post-processing
-deliverable, not implemented in this checkpoint.
+**What caps throttle — ANSWERED in Phase 3 (see below):** the constraint-
+activity breakdown shows most of the front (53/60) is constraint-INTERIOR —
+throttle is set by the objective trade-off, not a hard cap. Only the extremes
+bind: the min-thrust corner sits on thrust>=min, and the high-throttle corner
+approaches the SF and current limits jointly (throttle correlates +0.86 with
+both g[SF] and g[current]).
+
+## Phase 3 (checkpoint): config-driven runs, convergence, post-processing
+A run is fully specified by a `RunConfig` (frozen dataclass, `config.py`) +
+seed; `configs/default.py` constructs the default with each value's
+justification inline (the reason config is Python, not JSON). `build_run(cfg)`
+wires the existing radial_spec + solvers (sharing one BEMT so its memo helps);
+`run(cfg, seed)` calls the existing `optimize` — contracts.py and optimize.py
+untouched. Runs are bit-reproducible from config+seed. Entry point:
+`python run_demo.py [--mode exploration|decision] [--seed N] [--out DIR] [--convergence]`.
+
+**Two run modes (differ ONLY in seed-handling; identical physics, bounds,
+optimizer, constraints):**
+- **exploration** — a single seed, pop 60 / gen 40. For iteration and demos.
+  Exploration-grade: the convergence study measured ~18% single-seed final-HV
+  spread, so exact front edges carry seed noise.
+- **decision** — aggregates a configured seed list (default 5) by merging their
+  feasible archives into ONE cross-seed non-dominated front (union of all
+  designs, then keep the cross-seed Pareto set — an actual aggregated front
+  that export/plot/STL consume, NOT HV-averaging). Aggregation can only add
+  coverage, so the aggregated HV is >= every constituent seed's HV.
+  `configs/default.py` exposes `exploration_config()` and `decision_config()`;
+  `decision_config` is `replace(exploration, mode="decision")` — the split is
+  literally the mode field. `analysis.aggregate_front` reuses `run()` (the same
+  optimize path the convergence study drives) over the seeds, then the pure
+  `aggregate_results` merge. Every export's JSON `config` echo carries `mode`
+  and `seeds`, so no output is ambiguous about its grade.
+
+**Convergence (`analysis.py`; slow test `tests/test_convergence.py`, run with
+`pytest -m slow`).** Measured cost ~20 ms/candidate, so a 5-seed study at
+pop 60 x gen 40 = 12k evals ~ 4 min fits a <=5 min budget. Hypervolume is
+computed on the CUMULATIVE feasible non-dominated archive (monotonic by
+construction — the right convergence metric; the current-population front is
+not) against a FIXED reference: objectives are mapped to a common [0,1] loss
+using per-objective ideal/nadir bounds held constant in the config (thrust
+15/1.5 N, FoM 1/0, mass 0/0.035 kg, SF 10/0.8), ref point = 1. These bounds
+bracket every feasible front so HV is comparable across seeds/gens — they are
+normalization constants, not physical targets, and the nadir sits just outside
+the feasible boundary so no feasible design maps to loss 1. Result (5 seeds):
+HV rises monotonically within every seed, reaching 99% of its gen-40 value by
+~gen 37 but still creeping ~1-3%/10gen; final-HV mean ~0.075, seed rel-spread
+~18%. **Verdict: near-converged but seed-dependent** — a single-seed front is
+exploration-grade; for decision-grade, aggregate >=5 seeds or raise pop.
+**Recommendation: pop 60 / gen 40** (baked into `default.py`) as the
+budget-fitting near-converged setting.
+
+**Constraint activity (the open 2c question, answered).** Each Pareto design's
+g-vector is classified binding / slack / violated with a per-constraint
+tolerance = 2% of that constraint's own threshold scale (SF->1, thrust->
+min_thrust, resonance->margin_min, current->1; a single absolute tol would be
+meaningless across differently-scaled g's). Across the seed-0 front: 53/60
+designs are fully interior (all constraints slack); only 7/60 bind any
+constraint. **What caps throttle:** the low-throttle end (0.36) is capped by
+thrust>=min (can't de-rate below 2 N); the high-throttle end (0.85) is jointly
+bounded by SF and motor-current (both correlate +0.86 with throttle; the
+max-thrust design sits at SF 1.37, I 17/18 A) but is not tightly binding at
+2% tol; the bulk of the front is set by the four-way objective trade-off, not
+a hard cap. So the answer is "a mix, and mostly not a hard constraint."
+
+**Export + plotting.** The front exports to JSON (`export.py`) — chosen over
+CSV because each record is nested/heterogeneous (variable-length decision
+vector + objectives + constraint name->g map + activity map); JSON keeps it
+self-describing with the config echo, activity summary, and convergence in one
+re-readable file. The four objective-corner designs (max thrust / max FoM /
+min mass / max safety) export as watertight ASCII STL. Plotting (`plotting.py`)
+provides a pairwise objective scatter matrix and a parallel-coordinates plot,
+with constraint-binding designs distinguished, saved via the non-interactive
+Agg backend. **matplotlib is an OPTIONAL extra** (`pip install -e '.[plot]'`),
+imported lazily; absent, plotting raises a clear message and the run still
+produces its JSON/STL. Core runtime deps stay `["numpy", "pymoo>=0.6"]`.
+
+**Grade of earlier-phase numbers (retroactive honesty).** Every front shown in
+earlier phases — the Phase-2c demo, the A2 before/after (13.3->9.4 N, throttle
+0.36-0.85, current 17.9/18 A), and the 2c/3 constraint-activity breakdown —
+was produced by a SINGLE seed, i.e. exploration-grade. The qualitative
+conclusions hold (rpm is motor-bounded; throttle is the relief valve; the
+front is largely constraint-interior; peak thrust drops under the motor
+coupling), but the exact quantitative edges carry the ~18% single-seed HV
+noise. Decision-grade numbers require the aggregated multi-seed front (decision
+mode). Read prior single-seed figures as representative, not final.
