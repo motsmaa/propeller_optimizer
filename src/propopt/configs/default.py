@@ -15,7 +15,7 @@ from ..solvers.beam import PLA
 
 def exploration_config() -> RunConfig:
     """EXPLORATION-grade: a single seed, pop 60 / gen 40. For iteration and
-    demos. Per the convergence study the single-seed final-HV spread is ~18%,
+    demos. Per the convergence study the single-seed final-HV spread is ~25%,
     so the exact edges of an exploration front carry seed noise — do NOT quote
     its numbers as final (use decision mode for that)."""
     return RunConfig(
@@ -28,9 +28,15 @@ def exploration_config() -> RunConfig:
                                # the UIUC apcsf_10x4.7 validation prop.
         hub_radius_m=0.01,     # ~8% root cutout, typical small-prop hub.
         n_blades=2,            # 2-blade, matches the validation prop + motor.
-        chord_bounds=(0.005, 0.030),   # 5-30 mm: spans thin tip to broad root
-                                       # for a 10-inch prop; polar proxy was
-                                       # checked near this range.
+        chord_bounds=(0.007, 0.030),   # 7-30 mm for a 10-inch prop. The lower
+                                       # bound is set by the finite TE below,
+                                       # two ways: the geometry guard rejects
+                                       # chord < te/(0.5*0.12) = 6.67 mm, and
+                                       # more fundamentally a 0.4 mm TE on a
+                                       # 5 mm chord is 8% of chord — a wedge,
+                                       # not a propeller section. 7 mm keeps
+                                       # margin above the guard (TE <= 5.7% of
+                                       # chord everywhere).
         twist_bounds=(0.0, 0.6),       # 0-34 deg geometric; BEMT rejects
                                        # |twist|>=pi/2, so this stays valid.
         throttle_bounds=(0.2, 1.0),    # >=20%: below that the first-order motor
@@ -42,6 +48,18 @@ def exploration_config() -> RunConfig:
         material=PLA,          # printed PLA, isotropic first-pass (see beam.py).
         kt_root=2.5,           # conservative root stress-concentration guard,
                                # placeholder for Phase-4 FEA (see beam.py).
+        te_thickness_m=4.0e-4, # 0.40 mm blunt trailing edge. TWO independent
+                               # reasons for this exact value: (1) one 0.4 mm
+                               # nozzle/extrusion width is the FDM
+                               # manufacturing floor — below one extrusion
+                               # width a slicer cannot lay a closed edge at
+                               # all; (2) the mesh-quality study (README
+                               # Phase-2d) puts it where quality resolves —
+                               # gamma_min 0.000 -> 0.074 and gamma_p01
+                               # <=0.08 -> 0.496 vs the Phase-4a sharp-TE
+                               # baseline, and it unblocks gmsh remesh mode,
+                               # which failed outright on the knife edge —
+                               # without paying the extra mass of 0.5 mm.
         # --- constraints ---
         min_thrust_N=2.0,      # a design must lift something; excludes the
                                # trivial zero-pitch optimum.
@@ -53,7 +71,7 @@ def exploration_config() -> RunConfig:
                                # value by ~gen 37 (still creeping ~1-3%/10gen).
                                # 60x40 is the near-converged setting that fits a
                                # <=5 min 5-seed budget; final-HV seed spread is
-                               # ~18%, so a single-seed front is exploration-
+                               # ~25%, so a single-seed front is exploration-
                                # grade, not decision-grade (aggregate seeds or
                                # raise pop for the latter).
         seed=0,                # exploration seed; runs reproduce from it.
@@ -76,7 +94,7 @@ def decision_config() -> RunConfig:
     ONLY in seed-handling — aggregates the cross-seed non-dominated union of
     `seeds` (>=5) into one front. Per the convergence study (README Phase-3),
     5-seed aggregation is the decision-grade setting; single-seed fronts carry
-    ~18% HV spread and are exploration-only."""
+    ~25% HV spread and are exploration-only."""
     return dataclasses.replace(exploration_config(), mode="decision")
 
 

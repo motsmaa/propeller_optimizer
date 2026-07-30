@@ -50,6 +50,10 @@ from .contracts import PropellerDesign, SolverError
 
 PITCH_AXIS_CHORD_FRAC = 0.25  # sections rotate about the quarter-chord point
 DEFAULT_N_CHORD = 25          # chordwise samples per surface (section has 2n-2 verts)
+# A trailing edge may not exceed this fraction of the thinnest station's max
+# thickness; beyond it the "wedge" stops being a trailing edge and the section
+# stops being an aerofoil. Enforced per candidate (chord-dependent).
+TE_MAX_THICKNESS_FRACTION = 0.5
 
 # section(n_chord) -> (x, y_upper, y_lower), unit chord: x[0]=0 (LE), x[-1]=1
 # (TE), y_upper[0]==y_lower[0], y_upper[-1]==y_lower[-1] (closed TE), and
@@ -85,13 +89,70 @@ def make_naca4_section(camber: float = 0.04, camber_pos: float = 0.4,
 DEFAULT_SECTION: SectionFn = make_naca4_section()
 
 
-def section_polygon(section: SectionFn, n_chord: int) -> np.ndarray:
-    """Closed simple polygon (P, 2), CCW: LE -> lower surface -> TE -> upper
-    surface -> back to LE. LE and TE each appear exactly once (P = 2*n_chord - 2)."""
+def thickened_te_section(section: SectionFn, n_chord: int, te_thickness_norm: float):
+    """`section` with a smooth wedge added so the TE reaches `te_thickness_norm`
+    TOTAL thickness (chord-normalized). Returns (x, y_upper, y_lower).
+
+    Functional form — a cubic smoothstep in the aft region only:
+
+        u(x)     = clip((x - x_tmax) / (1 - x_tmax), 0, 1)
+        S(u)     = 3u^2 - 2u^3                       (Hermite smoothstep)
+        y_upper += (te/2) * S(u),  y_lower -= (te/2) * S(u)
+
+    Chosen because it satisfies every requirement exactly and with no free
+    constants to tune:
+      * S(0) = S'(0) = 0, so the wedge and its slope vanish AT the
+        max-thickness station -> the forward section (including the leading
+        edge and the max-thickness point and value) is bit-for-bit untouched,
+        and the join is C1 with no kink;
+      * S(1) = 1, so the TE thickness is EXACTLY the requested value, not
+        asymptotically close to it;
+      * S'(1) = 0, so the surface meets the blunt TE face tangentially rather
+        than as a corner, which is what keeps the aft facets well-shaped.
+
+    `x_tmax` is taken as the SAMPLED argmax of the base thickness (the seam
+    only exposes samples, not an analytic section), so "unchanged forward of
+    max thickness" holds exactly on the sampled points the loft actually uses.
+    """
     x, yu, yl = section(n_chord)
+    if te_thickness_norm <= 0.0:
+        return x, yu, yl
+    x_tmax = float(x[int(np.argmax(yu - yl))])
+    denom = 1.0 - x_tmax
+    if denom <= 0.0:                       # max thickness at the TE: no aft region
+        raise SolverError("section max thickness is at the trailing edge; "
+                          "cannot add a TE wedge")
+    u = np.clip((x - x_tmax) / denom, 0.0, 1.0)
+    half = 0.5 * te_thickness_norm * (3.0 * u ** 2 - 2.0 * u ** 3)
+    return x, yu + half, yl - half
+
+
+def section_polygon(section: SectionFn, n_chord: int,
+                    te_thickness_norm: float = 0.0) -> np.ndarray:
+    """Closed simple polygon (P, 2), CCW: LE -> lower surface -> TE -> upper
+    surface -> back to LE.
+
+    SHARP TE (te_thickness_norm == 0, the default): LE and TE each appear
+    exactly once, P = 2*n_chord - 2. This path is byte-for-byte the original
+    Phase-2a code so a zero TE thickness is inert by construction.
+
+    BLUNT TE (te_thickness_norm > 0): the TE becomes a short flat FACE, so the
+    upper and lower trailing points are distinct and P = 2*n_chord - 1. The
+    polygon stays simple and closed; only the vertex count and the aft
+    connectivity change (see `_cap_triangles`).
+    """
+    if te_thickness_norm <= 0.0:
+        x, yu, yl = section(n_chord)
+        k = len(x)
+        px = np.concatenate([[x[0]], x[1:k - 1], [x[-1]], x[k - 2:0:-1]])
+        py = np.concatenate([[yl[0]], yl[1:k - 1], [yl[-1]], yu[k - 2:0:-1]])
+        return np.stack([px, py], axis=1)
+
+    x, yu, yl = thickened_te_section(section, n_chord, te_thickness_norm)
     k = len(x)
-    px = np.concatenate([[x[0]], x[1:k - 1], [x[-1]], x[k - 2:0:-1]])
-    py = np.concatenate([[yl[0]], yl[1:k - 1], [yl[-1]], yu[k - 2:0:-1]])
+    # ... LE, lower surface, TE-lower, TE-upper, upper surface, back to LE
+    px = np.concatenate([[x[0]], x[1:k - 1], [x[-1]], [x[-1]], x[k - 2:0:-1]])
+    py = np.concatenate([[yl[0]], yl[1:k - 1], [yl[-1]], [yu[-1]], yu[k - 2:0:-1]])
     return np.stack([px, py], axis=1)
 
 
@@ -128,13 +189,26 @@ class BladeSolid:
     volume_m3: float
 
 
-def _cap_triangles(k: int, ring: np.ndarray, top: bool) -> list[tuple[int, int, int]]:
+def _cap_triangles(k: int, ring: np.ndarray, top: bool,
+                   blunt_te: bool = False) -> list[tuple[int, int, int]]:
     """Triangulate one section polygon by zipping the (x-monotone) upper and
     lower vertex rows. `ring` maps polygon position -> global vertex id.
-    top=True winds outward +z (tip cap), top=False outward -z (root cap)."""
-    p = 2 * k - 2
-    low = [0] + list(range(1, k - 1)) + [k - 1]           # LE, lower interior, TE
-    up = [0] + [p - j for j in range(1, k - 1)] + [k - 1]  # same columns, upper row
+    top=True winds outward +z (tip cap), top=False outward -z (root cap).
+
+    Sharp TE: both rows END at the same vertex (k-1), so the final column is a
+    triangle and one degenerate is dropped. Blunt TE: the rows end at DISTINCT
+    vertices (k-1 lower, k upper) and the final column is a genuine quad — the
+    only connectivity change, and the reason a blunt cap has one more triangle
+    per section than a sharp one.
+    """
+    if blunt_te:
+        p = 2 * k - 1
+        low = [0] + list(range(1, k - 1)) + [k - 1]              # ..., TE lower
+        up = [0] + [p - j for j in range(1, k - 1)] + [k]        # ..., TE upper
+    else:
+        p = 2 * k - 2
+        low = [0] + list(range(1, k - 1)) + [k - 1]           # LE, lower interior, TE
+        up = [0] + [p - j for j in range(1, k - 1)] + [k - 1]  # same columns, upper row
     tris = []
     for j in range(k - 1):
         a, b, c, d = low[j], low[j + 1], up[j + 1], up[j]
@@ -151,8 +225,18 @@ def build_blade_solid(
     twist_rad: np.ndarray,
     section: SectionFn = DEFAULT_SECTION,
     n_chord: int = DEFAULT_N_CHORD,
+    te_thickness_m: float = 0.0,
 ) -> BladeSolid:
     """Loft `section` through the stations -> verified watertight solid.
+
+    `te_thickness_m` is an ABSOLUTE trailing-edge thickness in metres, not a
+    percentage of chord: the floor it represents is a manufacturing limit
+    (printed PLA cannot hold an edge thinner than roughly a nozzle width), and
+    a percentage would leave the small-chord tip stations knife-edged — exactly
+    where the mesh sliver problem is worst. Because it is absolute, the
+    CHORD-NORMALIZED trailing thickness differs per station, so each station
+    gets its own section polygon; with te_thickness_m == 0 the original single
+    shared polygon is used unchanged.
 
     Raises SolverError on any degenerate input or if the built mesh fails the
     closed-manifold / positive-volume verification (never returns silently
@@ -173,10 +257,36 @@ def build_blade_solid(
     if np.any(np.abs(np.diff(t)) >= np.pi / 2):
         raise SolverError("adjacent-station twist step >= pi/2: loft would self-intersect")
 
-    poly = section_polygon(section, n_chord)          # (P, 2) unit chord, CCW
-    n_st, p = len(r), len(poly)
-    xi = (poly[:, 0] - PITCH_AXIS_CHORD_FRAC)[None, :] * c[:, None]
-    eta = poly[:, 1][None, :] * c[:, None]
+    te = float(te_thickness_m)
+    if not np.isfinite(te) or te < 0.0:
+        raise SolverError(f"te_thickness_m must be finite and >= 0, got {te!r}")
+    blunt = te > 0.0
+    if blunt:
+        # A trailing edge thicker than the section itself is nonsense. Checked
+        # here (not at config construction) because it depends on the CHORD of
+        # this candidate: a config-level value can be valid for one design and
+        # impossible for a thinner one, so it is a per-candidate feasibility
+        # outcome -> SolverError, which the optimizer penalizes.
+        x0, yu0, yl0 = section(n_chord)
+        t_max_norm = float(np.max(yu0 - yl0))
+        limit = TE_MAX_THICKNESS_FRACTION * t_max_norm * float(c.min())
+        if te >= limit:
+            raise SolverError(
+                f"te_thickness_m {te:.4e} m exceeds {TE_MAX_THICKNESS_FRACTION:.0%} "
+                f"of the thinnest station's max thickness ({limit:.4e} m)")
+
+    n_st = len(r)
+    if blunt:
+        # absolute TE thickness -> per-station normalized thickness te/chord
+        polys = np.stack([section_polygon(section, n_chord, te / ci) for ci in c])
+        p = polys.shape[1]
+        xi = (polys[:, :, 0] - PITCH_AXIS_CHORD_FRAC) * c[:, None]
+        eta = polys[:, :, 1] * c[:, None]
+    else:
+        poly = section_polygon(section, n_chord)      # (P, 2) unit chord, CCW
+        p = len(poly)
+        xi = (poly[:, 0] - PITCH_AXIS_CHORD_FRAC)[None, :] * c[:, None]
+        eta = poly[:, 1][None, :] * c[:, None]
     cos_t, sin_t = np.cos(t)[:, None], np.sin(t)[:, None]
     verts = np.empty((n_st, p, 3))
     verts[:, :, 0] = xi * cos_t - eta * sin_t          # tangential (rotor plane)
@@ -193,9 +303,9 @@ def build_blade_solid(
             faces.append((int(a[j]), int(a[q]), int(b[q])))
             faces.append((int(a[j]), int(b[q]), int(b[j])))
     n_skin = len(faces)
-    faces += _cap_triangles(n_chord, ring(0), top=False)        # root cap (-z out)
+    faces += _cap_triangles(n_chord, ring(0), top=False, blunt_te=blunt)
     n_root = len(faces) - n_skin
-    faces += _cap_triangles(n_chord, ring(n_st - 1), top=True)  # tip cap (+z out)
+    faces += _cap_triangles(n_chord, ring(n_st - 1), top=True, blunt_te=blunt)
     faces_arr = np.asarray(faces, dtype=int)
 
     if not is_closed_manifold(faces_arr):
@@ -214,7 +324,8 @@ def build_blade_solid(
 
 def solid_from_design(design: PropellerDesign,
                       section: SectionFn = DEFAULT_SECTION,
-                      n_chord: int = DEFAULT_N_CHORD) -> BladeSolid:
+                      n_chord: int = DEFAULT_N_CHORD,
+                      te_thickness_m: float = 0.0) -> BladeSolid:
     """Build one blade solid from the design's shared stations.
 
     Lofts through `design.station_r_m`, EXTENDED with end-held sections
@@ -233,4 +344,4 @@ def solid_from_design(design: PropellerDesign,
     if r[-1] < design.radius_m:
         r = np.concatenate([r, [design.radius_m]])
         c, t = np.concatenate([c, [c[-1]]]), np.concatenate([t, [t[-1]]])
-    return build_blade_solid(r, c, t, section, n_chord)
+    return build_blade_solid(r, c, t, section, n_chord, te_thickness_m)

@@ -15,14 +15,16 @@ from .null import MAT_DENSITY, NullStructSolver
 class GeometryMassStructSolver(StructSolver):
     def __init__(self, density_kg_m3: float = MAT_DENSITY,
                  section: SectionFn = DEFAULT_SECTION,
-                 n_chord: int = DEFAULT_N_CHORD) -> None:
+                 n_chord: int = DEFAULT_N_CHORD,
+                 te_thickness_m: float = 0.0) -> None:
         self._density = float(density_kg_m3)
         self._section = section
         self._n_chord = n_chord
+        self._te = float(te_thickness_m)
         self._null = NullStructSolver()  # placeholder SF/stress source
 
     def evaluate(self, design: PropellerDesign) -> StructResult:
-        solid = solid_from_design(design, self._section, self._n_chord)
+        solid = solid_from_design(design, self._section, self._n_chord, self._te)
         mass = design.n_blades * solid.volume_m3 * self._density
         placeholder = self._null.evaluate(design)
         # modal fields pass through the null solver's documented sentinels —

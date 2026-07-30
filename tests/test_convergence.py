@@ -10,7 +10,8 @@ from propopt.configs.default import default_config
 
 pytestmark = pytest.mark.slow
 
-# Measured 5-seed final-HV rel-spread ~18% at pop60/gen40; 0.35 gives headroom
+# Measured 5-seed final-HV rel-spread: 25.1% at pop60/gen40 with the 7 mm
+# chord bound + 0.4 mm TE (was ~18% at the old 5 mm bound). 0.35 gives headroom
 # for run-to-run variance while still catching a broken/divergent run.
 SEED_SPREAD_LIMIT = 0.35
 

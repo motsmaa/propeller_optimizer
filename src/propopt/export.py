@@ -102,7 +102,7 @@ def export_selected_stl(out_dir: str | Path, cfg: RunConfig,
     written = []
     for label, i in select_representative(records).items():
         design = spec.decode(np.asarray(records[i].x, dtype=float))
-        solid = solid_from_design(design)
+        solid = solid_from_design(design, te_thickness_m=cfg.te_thickness_m)
         p = out_dir / f"blade_{label}.stl"
         _write_ascii_stl(p, solid.vertices, solid.faces, label)
         written.append(p)

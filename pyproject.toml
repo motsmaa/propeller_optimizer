@@ -9,11 +9,17 @@ description = "Generative propeller design optimizer"
 requires-python = ">=3.10"
 dependencies = ["numpy", "pymoo>=0.6"]
 
-# Optional extras — NOT runtime dependencies. Plotting and the test-only
-# geometry cross-validator degrade gracefully / skip when absent.
+# Optional extras — NOT runtime dependencies. Plotting, the test-only geometry
+# cross-validator, and the Phase-4 high-fidelity path all degrade gracefully /
+# skip when absent.
+#
+# `hf` covers the Phase-4a CalculiX validation path. NOTE: gmsh is pip-
+# installable, but CalculiX (`ccx`) is a SYSTEM BINARY and is NOT installable
+# via pip — see src/propopt/hf/SOURCE.md for the install route and versions.
 [project.optional-dependencies]
 plot = ["matplotlib"]
-dev = ["matplotlib", "trimesh", "pytest"]
+hf = ["gmsh"]
+dev = ["matplotlib", "trimesh", "pytest", "gmsh"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

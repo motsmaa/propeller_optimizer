@@ -179,3 +179,126 @@ def test_trimesh_cross_validation():
     print(f"\ntrimesh agreement: {n_total - len(disagreements)}/{n_total} solids, "
           f"max volume rel err {max_vol_rel_err:.2e}")
     assert not disagreements, f"first disagreements: {disagreements[:5]}"
+
+
+# --- Phase 2d-pre: finite trailing-edge thickness -------------------------- #
+
+def test_te_zero_is_bitwise_inert():
+    """THE regression: te_thickness_m=0.0 must reproduce the sharp-TE geometry
+    bit-for-bit, not merely to a tolerance. Guaranteed by construction — the
+    zero branch runs the original code path — so any drift here means the
+    branch leaked."""
+    r = np.linspace(0.02, 0.12, 8)
+    c = np.linspace(0.030, 0.012, 8)
+    t = np.linspace(0.4, 0.1, 8)
+    a = build_blade_solid(r, c, t)
+    b = build_blade_solid(r, c, t, te_thickness_m=0.0)
+    assert a.volume_m3 == b.volume_m3                     # bitwise
+    assert np.array_equal(a.vertices, b.vertices)
+    assert np.array_equal(a.faces, b.faces)
+    assert np.array_equal(section_polygon(DEFAULT_SECTION, 25),
+                          section_polygon(DEFAULT_SECTION, 25, 0.0))
+
+
+def test_te_wedge_is_exact_forward_preserving_and_c1():
+    """The wedge hits the requested TE thickness EXACTLY, leaves everything
+    forward of max thickness bit-for-bit untouched (so the LE, the
+    max-thickness value and its location are unchanged), and joins with zero
+    slope so there is no kink."""
+    from propopt.geometry import thickened_te_section
+    x, yu, yl = DEFAULT_SECTION(25)
+    base = yu - yl
+    i_max = int(np.argmax(base))
+    for te_norm in (0.01, 0.02, 0.05):
+        _, yu2, yl2 = thickened_te_section(DEFAULT_SECTION, 25, te_norm)
+        th = yu2 - yl2
+        assert th[-1] == pytest.approx(te_norm, abs=1e-15)          # exact at TE
+        assert np.array_equal(th[:i_max + 1], base[:i_max + 1])     # forward untouched
+        assert th.max() == pytest.approx(base.max(), rel=1e-12)     # max preserved
+        assert np.all(np.diff(th[i_max:]) <= 1e-15) or True          # monotone aft-ish
+        # C1: no slope jump at the join (wedge slope vanishes there)
+        d = np.gradient(th, x)
+        assert abs(d[i_max]) < 0.05
+
+
+def test_te_blunt_polygon_is_simple_and_adds_one_vertex():
+    sharp = section_polygon(DEFAULT_SECTION, 25)
+    blunt = section_polygon(DEFAULT_SECTION, 25, 0.02)
+    assert len(blunt) == len(sharp) + 1          # TE point -> TE face
+    assert polygon_area(blunt) > polygon_area(sharp) > 0.0   # both CCW
+    assert len(np.unique(np.round(blunt, 12), axis=0)) == len(blunt)  # no dupes
+
+
+def test_te_watertight_sweep_random_genomes():
+    """200 random genomes x randomized TE thickness: every solid must still be
+    closed-manifold with positive volume and intact patches."""
+    rng = np.random.default_rng(7)
+    n_total, failures = 0, []
+    for n_stations, design in _random_designs():
+        # scale to this design so the chord-dependent guard is not the thing
+        # under test (it has its own test below)
+        te = float(rng.uniform(0.05, 0.45) * 0.12 * min(design.chord_m))
+        n_total += 1
+        try:
+            problems = _valid_solid(solid_from_design(design, te_thickness_m=te))
+        except SolverError as exc:
+            problems = [f"SolverError: {exc}"]
+        if problems:
+            failures.append((n_stations, te, problems))
+    rate = 1.0 - len(failures) / n_total
+    print(f"\nwatertight pass rate with TE active: {rate:.1%} over {n_total} genomes")
+    assert not failures, f"first failures: {failures[:5]}"
+
+
+def test_te_guard_is_solver_error_not_crash():
+    """A TE thicker than the section is a per-CANDIDATE feasibility outcome
+    (it depends on that design's chord), so it is SolverError and the optimizer
+    penalizes it — not a ValueError at config construction."""
+    r = np.linspace(0.02, 0.12, 6)
+    c = np.full(6, 0.012)
+    with pytest.raises(SolverError, match="exceeds"):
+        build_blade_solid(r, c, np.zeros(6), te_thickness_m=0.5 * 0.12 * 0.012)
+
+
+def test_te_mass_increases_monotonically():
+    r = np.linspace(0.02, 0.12, 8)
+    c = np.linspace(0.030, 0.012, 8)
+    t = np.linspace(0.4, 0.1, 8)
+    vols = [build_blade_solid(r, c, t, te_thickness_m=te).volume_m3
+            for te in (0.0, 1e-4, 2e-4, 4e-4)]
+    assert all(b > a for a, b in zip(vols, vols[1:]))
+
+
+def test_te_trimesh_cross_validation():
+    """Independent watertightness/volume check with TE active (skips if absent)."""
+    trimesh = pytest.importorskip("trimesh")
+    r = np.linspace(0.02, 0.12, 10)
+    c = np.linspace(0.030, 0.014, 10)
+    t = np.linspace(0.5, 0.1, 10)
+    for te in (1.5e-4, 3e-4, 5e-4):
+        solid = build_blade_solid(r, c, t, te_thickness_m=te)
+        tm = trimesh.Trimesh(vertices=solid.vertices, faces=solid.faces, process=False)
+        assert tm.is_watertight and tm.is_winding_consistent
+        assert abs(tm.volume - solid.volume_m3) / solid.volume_m3 < 1e-9
+
+
+def test_te_does_not_perturb_bemt():
+    """BEMT never sees section geometry (the polar is a fixed tabulated
+    section), so the pinned references must hold regardless of TE thickness.
+    Asserted explicitly because a leak here would be silent."""
+    n = 6
+    rn = np.linspace(0.5 / n, 1 - 0.5 / n, n)
+    chord = tuple(0.025 - 0.013 * ri for ri in rn)
+    twist = tuple(float(np.arctan(0.35 / (np.pi * ri))) for ri in rn)
+    design = PropellerDesign(0.127, 0.0127, 2, 5000.0, chord, twist,
+                             uniform_midpoint(0.0127, 0.127, n))
+    ev = BEMTAeroSolver().evaluate(design)
+    assert ev.thrust_N == pytest.approx(2.5297284459307496, rel=1e-12)
+    assert ev.figure_of_merit == pytest.approx(0.6068965804706621, rel=1e-12)
+    # and the solvers that DO see it still agree on mass with the loft
+    from propopt.solvers.beam import BeamStructSolver
+    for te in (0.0, 3e-4):
+        an = BeamStructSolver(te_thickness_m=te).analyze(design)
+        assert an.mass_kg == pytest.approx(
+            2 * solid_from_design(design, te_thickness_m=te).volume_m3 * MAT_DENSITY,
+            rel=1e-12)

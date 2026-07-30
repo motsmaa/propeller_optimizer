@@ -9,6 +9,11 @@ src/propopt/
   contracts.py      PropellerDesign, EvalResult, StructResult, ABCs, SolverError (SI)
   stations.py       station spacing schemes (uniform_midpoint, cosine) + quadrature weights
   motor.py          Phase 2c: BLDC motor model + torque-equilibrium root-find (Brent)
+  hf/               Phase 4a: high-fidelity validators (NOT the inner loop)
+    wsl.py          Windows<->WSL boundary: path translation + subprocess (4b reuses)
+    mesh.py         STL -> tet mesh via gmsh; volume-drift + quality gates
+    calculix.py     INP writer, ccx runner, .dat parser, CalculiXStructSolver
+    SOURCE.md       toolchain provenance (ccx 2.21, gmsh 4.15.2, install route)
   config.py         Phase 3: RunConfig (frozen) + build_run/run; single source of truth
   configs/default.py Phase 3: the default RunConfig with justification per value
   analysis.py       Phase 3: hypervolume convergence + constraint-activity breakdown
@@ -292,7 +297,7 @@ untouched. Runs are bit-reproducible from config+seed. Entry point:
 **Two run modes (differ ONLY in seed-handling; identical physics, bounds,
 optimizer, constraints):**
 - **exploration** — a single seed, pop 60 / gen 40. For iteration and demos.
-  Exploration-grade: the convergence study measured ~18% single-seed final-HV
+  Exploration-grade: the convergence study measured ~25% single-seed final-HV
   spread, so exact front edges carry seed noise.
 - **decision** — aggregates a configured seed list (default 5) by merging their
   feasible archives into ONE cross-seed non-dominated front (union of all
@@ -319,7 +324,8 @@ normalization constants, not physical targets, and the nadir sits just outside
 the feasible boundary so no feasible design maps to loss 1. Result (5 seeds):
 HV rises monotonically within every seed, reaching 99% of its gen-40 value by
 ~gen 37 but still creeping ~1-3%/10gen; final-HV mean ~0.075, seed rel-spread
-~18%. **Verdict: near-converged but seed-dependent** — a single-seed front is
+~25% (re-measured after the 7 mm chord bound; was ~18% at the 5 mm bound).
+**Verdict: near-converged but seed-dependent** — a single-seed front is
 exploration-grade; for decision-grade, aggregate >=5 seeds or raise pop.
 **Recommendation: pop 60 / gen 40** (baked into `default.py`) as the
 budget-fitting near-converged setting.
@@ -355,6 +361,188 @@ earlier phases — the Phase-2c demo, the A2 before/after (13.3->9.4 N, throttle
 was produced by a SINGLE seed, i.e. exploration-grade. The qualitative
 conclusions hold (rpm is motor-bounded; throttle is the relief valve; the
 front is largely constraint-interior; peak thrust drops under the motor
-coupling), but the exact quantitative edges carry the ~18% single-seed HV
+coupling), but the exact quantitative edges carry the ~25% single-seed HV
 noise. Decision-grade numbers require the aggregated multi-seed front (decision
 mode). Read prior single-seed figures as representative, not final.
+
+## Phase 4a (first slice): CalculiX structural HF path
+
+Purpose: prove the mesher -> deck-writer -> runner -> parser chain end to end on
+ONE design, and find out whether meshing the triangle loft will fight us. No
+modal, no robustness sweep, no Kt calibration in this slice. `hf/` is a
+VALIDATOR path — `CalculiXStructSolver` implements `StructSolver` so it can be
+compared like-for-like against the beam, but it is never wired into
+`optimize.py` (seconds-to-minutes per case vs ~20 ms for a whole reduced
+evaluation).
+
+Toolchain (see `hf/SOURCE.md`): **CalculiX 2.21** via WSL2 + Debian
+`calculix-ccx`, **gmsh 4.15.2** via pip under the `hf` extra. `ccx` is a system
+binary and cannot be a pip dependency; core deps remain
+`["numpy","pymoo>=0.6"]`. The Windows<->WSL boundary is text-only and lives in
+one module (`hf/wsl.py`) because OpenFOAM reuses it in 4b: Python writes the
+INP, ccx reads it and writes `.dat`/`.frd`, Python parses. Binary location is
+configurable (arg / `$PROPOPT_CCX` / WSL PATH / Windows PATH) — no hardcoded
+distro or versioned path. **All decks are strict SI** (m, kg, s, N, Pa); the
+STL is already metres and nothing rescales it.
+
+### Closed-form anchors (prismatic bar, not the blade) — `tests/test_hf_anchors.py`
+| anchor | closed form | converged FE | note |
+|---|---|---|---|
+| cantilever tip deflection | `qL^4/8EI` | **-0.46%** at 16k tets | converging (-0.79/-0.55/-0.52/-0.46%); lands *below* beam theory because a fully clamped 3-D face also suppresses Poisson contraction and warping |
+| rotating-bar axial stress | `0.5*rho*omega^2*(R^2-z^2)` | **within ~1%** at 0.2R and 0.5R | sampled against the analytic profile away from the clamp, so no clamp artifact |
+
+Wall-clock (order-2 tets, one static case): 1k tets ~3 s, 5k ~11 s, 9k ~19 s,
+16k ~37-53 s, 101k ~4.3 min. **ccx dominates; meshing is 0.1-14 s.** This is the
+number that sizes every later HF cost estimate.
+
+### The blade (decision-mode max-thrust champion, front index 93 of 226)
+thrust 10.439 N, rpm 8537, SF_beam 1.293, mass 16.40 g, chord 17.0-29.9 mm.
+
+**4.1 centrifugal only** — an exact comparison (both models compute it
+independently, no load mapping involved). Compared as section-integrated axial
+force `N = (1/t) * sum(sigma_zz,e * V_e)` over a slab off the clamp, which is
+volume-weighted and therefore directly comparable to the beam's `N`:
+
+| grid | tets | gamma mean | dV vs loft | N_fea | vs beam |
+|---|---|---|---|---|---|
+| coarse | 5,767 | 0.351 | -0.41% | 400.4 N | +2.50% |
+| medium | 10,265 | 0.353 | -0.37% | 378.8 N | -3.02% |
+| fine | 101,063 | 0.724 | -0.36% | 393.5 N | **+0.74%** |
+
+The centrifugal path (CalculiX `CENTRIF` body load, omega^2, axis, density)
+agrees with the beam's analytic `N/A` to **0.74%** on the fine grid. Coarse/
+medium scatter +-3% tracks mesh quality, not physics.
+
+**4.2 combined (centrifugal + aero band tractions).** The band mapping
+conserves total force exactly: 5.2194 N/blade x 2 = 10.439 N vs the front's
+10.439 N. Three-way root stress, fine grid:
+
+| source | root stress | ratio to beam-raw |
+|---|---|---|
+| beam raw (no Kt) | 15.47 MPa | 1.00x |
+| beam x Kt=2.5 | 38.66 MPa | 2.50x |
+| CalculiX peak von Mises | 17.89 MPa | **1.16x** |
+| CalculiX root-band von Mises | 14.82 MPa | 0.96x |
+
+**THIS COMPARISON IS PARTIAL AND IS NOT A CALIBRATED Kt.** The current geometry
+has no root fillet and no hub body, so the FEA resolves concentration from the
+section shape and the clamped face only — not the fillet effect that usually
+dominates real root concentration. The 1.16x therefore does NOT refute Kt=2.5;
+it measures a different, smaller set of mechanisms. Two further error sources
+belong to neither model: the band-traction mapping (the beam applies each
+station's load as a point resultant on the beam axis; the FEA smears it over
+that band's wetted surface), and mesh quality at the trailing edge. Note also
+that peak von Mises does not converge monotonically (16.8 / 16.3 / 17.9 MPa) —
+it is a local extremum on a sliver-prone mesh — whereas the root-band value is
+stable to ~1.5% (14.61 / 14.56 / 14.82). **Use the root-band metric, not the raw
+peak, for cross-fidelity comparison.**
+
+### Verdict: is meshing the triangle loft viable?
+**Viable but not as-exported — and the blocker is geometric, not a resolution
+problem.** Three findings:
+
+1. **The trailing edge is a knife edge.** The default section closes the TE
+   exactly (`yt(1)=0`, measured thickness -3.3e-17), so the solid pinches to
+   zero thickness along the whole TE. Sliver tets there are unavoidable:
+   `gamma_min = 0.000` at EVERY grid and target size tried, and the 1st
+   percentile stays <= 0.08 even when the mean reaches 0.72. Refinement does
+   not fix it; it only shrinks the slivers. It also drives runaway refinement —
+   with gmsh's default min-size of target/5, the "fine" blade grid exploded to
+   a 33 MB deck; clamping `min_size_m = target_size_m` fixed that.
+2. **The as-exported surface is too coarse and too anisotropic to mesh.** The
+   loft writes 6 stations x 25 chordwise points (764 facets), i.e. ~1 mm
+   chordwise vs ~15 mm spanwise triangles. Preserve mode cannot refine past
+   that boundary (1,250 tets, `gamma_mean = 0.125` — unusable for stress), and
+   remesh mode fails outright: `classifySurfaces` cannot form closed loops
+   across the knife edges ("1D mesh seems not to be forming a closed loop").
+   **Densifying the surface sampling of the same parametric design is what
+   makes it work** (30-50 stations x 31-49 chordwise), reaching
+   `gamma_mean = 0.72`.
+3. **Volume fidelity is good, and preserve mode is bit-exact.** Densified
+   sampling agrees with the as-scored loft volume to **-0.36%** (within the 1%
+   flag), converging as sampling rises (-0.22% at 20x25 -> -0.018% at 80x81).
+   In preserve mode the meshed volume matches the loft's divergence-theorem
+   volume to **5.3e-9 relative**, and that residual is entirely the ASCII-STL
+   `%.6e` text precision (recomputing the as-written surface reproduces the
+   mesh volume exactly) — the mesher does not move the boundary at all.
+
+So meshing is **not** the Phase-4 bottleneck by cost (0.1-14 s vs 12-256 s for
+ccx), but it IS a correctness risk until the knife edge is addressed. Two
+follow-ons, both deliberately NOT done in this slice: give the HF path a
+documented densified-sampling option (surface sampling is currently a
+`build_blade_solid` argument the HF path has to drive by hand), and decide the
+trailing-edge treatment (a finite TE thickness would remove the sliver floor
+entirely). The Phase-2d root-thickness blend is a separate approved change and
+was deliberately kept out so that a meshing failure here had exactly one
+suspect.
+
+Modal is out of scope this slice: `CalculiXStructSolver` returns the same kind
+of unmistakable sentinels `null.py` uses for `first_freq_hz` / `resonance_margin`
+(1e9 Hz / 1e6) — **they are not real values**.
+
+## Finite trailing-edge thickness (adopted, 0.4 mm default)
+
+The section previously closed its trailing edge exactly (measured thickness
+-3.3e-17), producing a zero-thickness knife edge along the whole span. Phase 4a
+proved that is a *geometric* dead end for meshing, not a resolution problem:
+`gamma_min = 0.000` at every grid and target size tried, 1st percentile <= 0.08
+even at `gamma_mean` 0.72, runaway refinement, and gmsh remesh mode failing
+outright ("1D mesh seems not to be forming a closed loop").
+
+`geometry.py` now takes an ABSOLUTE `te_thickness_m` (metres, not %-chord) and
+adds a cubic-smoothstep wedge aft of max thickness:
+`u = clip((x-x_tmax)/(1-x_tmax),0,1)`, `S(u) = 3u^2-2u^3`, `y_up += (te/2)S`,
+`y_lo -= (te/2)S`. `S(0)=S'(0)=0` leaves everything forward of max thickness
+bit-for-bit untouched and joins C1 with no kink; `S(1)=1` hits the requested
+thickness exactly; `S'(1)=0` meets the blunt face tangentially. Absolute rather
+than %-chord because the floor is a manufacturing limit, and a percentage would
+leave the small-chord tip stations knife-edged — exactly where meshing is worst.
+
+Topology: the TE point becomes a short flat FACE, so the section polygon gains
+one vertex (P = 2k-2 -> 2k-1) and each cap's final column becomes a real quad
+instead of a degenerate triangle. `te_thickness_m = 0.0` runs the original code
+path and is **bitwise** inert (volume, vertices, faces all identical).
+
+**Adopted default: `te_thickness_m = 4.0e-4` (0.40 mm)** — one nozzle/extrusion
+width is the FDM manufacturing floor, and it is where mesh quality resolves
+(`gamma_min` 0.000 -> 0.074, `gamma_p01` <= 0.08 -> 0.496, `gamma_mean` 0.72 ->
+0.813) without the mass cost of 0.5 mm. It also **unblocks gmsh remesh mode**,
+which now succeeds on the as-exported 764-facet STL (~96k tets, -0.17% volume
+drift) — so the HF path no longer needs densified re-sampling. Preserve mode
+remains poor regardless of TE; that is a surface-sampling problem, a separate
+issue from the knife edge.
+
+`chord_bounds` lower bound raised **5 mm -> 7 mm** to match: the geometry guard
+rejects chord < te/(0.5*0.12) = 6.67 mm, and a 0.4 mm TE on a 5 mm chord is 8%
+of chord — a wedge, not a propeller section. At 7 mm the TE is <= 5.7% of chord
+everywhere. Failed evaluations per run: 17 (pre-TE) -> 40 (TE at 5 mm bounds)
+-> **10** (TE at 7 mm bounds).
+
+### Known limitation: blunt-TE base drag is NOT in the aero model
+The geometry now has a finite trailing edge, but the BEMT polars are XFOIL runs
+on a **sharp-TE** NACA 4412 and cannot represent **base drag** — the pressure
+deficit behind a blunt TE. BEMT is therefore **optimistic on drag by an
+unquantified amount that scales with te/chord**, which at the adopted default
+runs 1.6% of chord at the 25 mm root to 5.7% at the 7 mm tip station. Part of
+the top-end thrust and safety-factor improvement seen when TE was enabled is
+attributable to this omission rather than to real aerodynamic gain, and FoM is
+correspondingly optimistic. Quantifying it is a **Phase-4b CFD** task: RANS
+resolves base drag natively, so the CFD cross-check measures this directly
+rather than requiring a correlation. Until then, treat blunt-TE designs' drag,
+power and FoM as optimistic and do not read the TE-enabled thrust/SF gains as
+purely physical.
+
+### Known limitation: beam-vs-loft mass consistency degrades with TE active
+Worst-case `|beam - loft|/loft` over 100 random twisted genomes: **3.40%**
+(sharp TE) -> **11.46%** (0.4 mm TE). Diagnosed, not yet fixed. The cause is
+NOT the TE geometry: with a blunt TE the beam's span-exact `c^2`/`c^4` averages
+no longer factor out, so `_element_props` falls back to a trapezoidal mean of
+per-node absolute properties, and on a strongly tapered element (30 -> 12 mm)
+the trapezoid mean of `c^2` sits **+11.54%** above the exact
+`(ci^2 + ci*cj + cj^2)/3` — matching the observed 11.46% almost exactly. The
+fix is analytic and available: the blunt-TE area decomposes exactly as
+`A_base*c^2 + 0.5*(1-x_tmax)*te*c` (verified to 0.13%, the residual being
+polygon discretization at n_chord=25), so both terms have exact span-averages
+(`mean(c^2)` as before, `mean(c) = (ci+cj)/2`). Deferred deliberately. The
+LOFT volume remains the mass of record for the objective, so the optimizer is
+unaffected; only the beam's internal consistency diagnostic degrades.

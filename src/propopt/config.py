@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import numpy as np
+
 from .motor import DEFAULT_MOTOR, MotorSpec
 from .optimize import ParetoResult, optimize
 from .problem_spec import ProblemSpec, radial_spec
@@ -57,6 +59,12 @@ class RunConfig:
     # a Pareto design counts as "binding" on a constraint when |g| is within
     # this fraction of that constraint's own threshold scale (see analysis).
     binding_tol_frac: float = 0.02
+    # Absolute trailing-edge thickness (m), NOT a percentage of chord: the
+    # floor it encodes is a manufacturing limit (printed PLA cannot hold an
+    # edge thinner than ~a nozzle width), and a percentage would leave the
+    # small-chord tip stations knife-edged — exactly where meshing is worst.
+    # 0.0 = sharp TE (Phase-2a behaviour, inert by construction).
+    te_thickness_m: float = 0.0
     # run mode (seed-handling only; all physics/optimizer settings identical):
     #   "exploration" -> single seed `seed` (iteration/demos, exploration-grade)
     #   "decision"    -> aggregate the cross-seed non-dominated union of `seeds`
@@ -78,6 +86,13 @@ class RunConfig:
         for name, a, b in zip(OBJECTIVES, self.hv_ideal, self.hv_nadir):
             if a == b:
                 raise ValueError(f"hv_ideal == hv_nadir for {name}")
+        # Sign/finiteness is always wrong -> ValueError at construction. The
+        # chord-dependent "TE thicker than the section" check cannot live here
+        # (it depends on each candidate's chord) and is a SolverError in the
+        # geometry builder instead.
+        if not (np.isfinite(self.te_thickness_m) and self.te_thickness_m >= 0.0):
+            raise ValueError(
+                f"te_thickness_m must be finite and >= 0, got {self.te_thickness_m!r}")
         if self.mode not in ("exploration", "decision"):
             raise ValueError(f"mode must be exploration|decision, got {self.mode!r}")
         if len(self.seeds) < 1:
@@ -89,7 +104,8 @@ def build_run(cfg: RunConfig) -> tuple[ProblemSpec, BEMTAeroSolver, BeamStructSo
     instance is shared across the equilibrium root-find, aero, and the beam so
     its converged-state memo is reused (see bemt.py)."""
     aero = BEMTAeroSolver()
-    struct = BeamStructSolver(material=cfg.material, aero=aero, kt_root=cfg.kt_root)
+    struct = BeamStructSolver(material=cfg.material, aero=aero, kt_root=cfg.kt_root,
+                              te_thickness_m=cfg.te_thickness_m)
     spec = radial_spec(
         n_stations=cfg.n_stations, radius_m=cfg.radius_m,
         hub_radius_m=cfg.hub_radius_m, n_blades=cfg.n_blades,

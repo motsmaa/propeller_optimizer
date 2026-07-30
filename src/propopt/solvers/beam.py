@@ -74,18 +74,25 @@ class Material:
     density_kg_m3: float
     elastic_modulus_Pa: float
     yield_strength_Pa: float
+    # Poisson's ratio. The 1-D beam never needs it, but the Phase-4 CalculiX
+    # deck does; it lives here so a material has ONE definition shared by both
+    # fidelities rather than a constant hardcoded in the HF module.
+    poisson: float = 0.35
 
     def __post_init__(self) -> None:
         for f in ("density_kg_m3", "elastic_modulus_Pa", "yield_strength_Pa"):
             v = getattr(self, f)
             if not (np.isfinite(v) and v > 0.0):
                 raise ValueError(f"Material.{f} must be positive and finite, got {v!r}")
+        if not (np.isfinite(self.poisson) and -1.0 < self.poisson < 0.5):
+            raise ValueError(f"Material.poisson must be in (-1, 0.5), got {self.poisson!r}")
 
 
 # Typical PLA filament datasheet values (e.g. Prusament/Ultimaker PLA TDS:
 # E ~ 2.9-3.6 GPa, tensile strength ~ 45-60 MPa). Density matches the
 # geometry/mass constant MAT_DENSITY so mass stays consistent across solvers.
-PLA = Material("PLA (printed; isotropic first-pass)", MAT_DENSITY, 3.5e9, 50.0e6)
+PLA = Material("PLA (printed; isotropic first-pass)", MAT_DENSITY, 3.5e9, 50.0e6,
+               poisson=0.35)
 
 KT_ROOT_DEFAULT = 2.5  # root stress-concentration guard, see module docstring
 
@@ -102,10 +109,13 @@ class UnitSection:
 
 
 def unit_section_properties(section: SectionFn = DEFAULT_SECTION,
-                            n_chord: int = DEFAULT_N_CHORD) -> UnitSection:
+                            n_chord: int = DEFAULT_N_CHORD,
+                            te_thickness_norm: float = 0.0) -> UnitSection:
     """Exact polygon (Green's theorem) area / centroid / second moments of the
-    same section polygon the geometry loft uses."""
-    poly = section_polygon(section, n_chord)
+    same section polygon the geometry loft uses — including the blunt trailing
+    edge when `te_thickness_norm > 0`, so beam and loft never see different
+    sections."""
+    poly = section_polygon(section, n_chord, te_thickness_norm)
     x, y = poly[:, 0], poly[:, 1]
     x1, y1 = np.roll(x, -1), np.roll(y, -1)
     cross = x * y1 - x1 * y
@@ -224,7 +234,8 @@ class BeamStructSolver(StructSolver):
                  kt_root: float = KT_ROOT_DEFAULT,
                  section: SectionFn = DEFAULT_SECTION,
                  n_chord: int = DEFAULT_N_CHORD,
-                 n_harmonics: int = 3) -> None:
+                 n_harmonics: int = 3,
+                 te_thickness_m: float = 0.0) -> None:
         if kt_root < 1.0:
             raise ValueError(f"kt_root must be >= 1, got {kt_root}")
         self._mat = material
@@ -233,7 +244,17 @@ class BeamStructSolver(StructSolver):
         self._section = section
         self._n_chord = n_chord
         self._n_harm = int(n_harmonics)
+        self._te = float(te_thickness_m)
         self._unit = unit_section_properties(section, n_chord)
+
+    def _unit_at(self, chord: np.ndarray) -> list[UnitSection]:
+        """Per-station unit-section constants. With an ABSOLUTE trailing-edge
+        thickness the normalized section differs station to station, so the
+        single cached `self._unit` is only valid when the TE is sharp."""
+        if self._te <= 0.0:
+            return [self._unit] * len(chord)
+        return [unit_section_properties(self._section, self._n_chord, self._te / ci)
+                for ci in chord]
 
     # -- helpers --------------------------------------------------------------
 
@@ -260,8 +281,20 @@ class BeamStructSolver(StructSolver):
         ci, cj = c_nodes[:-1], c_nodes[1:]
         c2 = (ci ** 2 + ci * cj + cj ** 2) / 3.0
         c4 = (ci ** 4 + ci ** 3 * cj + ci ** 2 * cj ** 2 + ci * cj ** 3 + cj ** 4) / 5.0
-        area_e = self._unit.area * c2
-        ei_e = self._mat.elastic_modulus_Pa * self._unit.i_chord * c4
+        if self._te <= 0.0:
+            area_e = self._unit.area * c2
+            ei_e = self._mat.elastic_modulus_Pa * self._unit.i_chord * c4
+            return area_e, ei_e
+        # Blunt TE: the normalized section varies along the span, so the
+        # span-exact c^2 / c^4 averages no longer factor out. Fall back to the
+        # trapezoidal mean of the absolute per-node properties (exact only in
+        # the limit of fine stations) — the loft volume stays the mass of
+        # record, and the beam-vs-loft mass check reports the residual.
+        units = self._unit_at(c_nodes)
+        area_n = np.array([u.area for u in units]) * c_nodes ** 2
+        i_n = np.array([u.i_chord for u in units]) * c_nodes ** 4
+        area_e = 0.5 * (area_n[:-1] + area_n[1:])
+        ei_e = self._mat.elastic_modulus_Pa * 0.5 * (i_n[:-1] + i_n[1:])
         return area_e, ei_e
 
     # -- main -----------------------------------------------------------------
@@ -279,7 +312,7 @@ class BeamStructSolver(StructSolver):
         rho_a_e = mat.density_kg_m3 * area_e
         lengths = np.diff(r_n)
         beam_mass = design.n_blades * float(np.sum(rho_a_e * lengths))
-        solid = solid_from_design(design, self._section, self._n_chord)
+        solid = solid_from_design(design, self._section, self._n_chord, self._te)
         mass = design.n_blades * solid.volume_m3 * mat.density_kg_m3
 
         # centrifugal tension at nodes; element tension = end average
@@ -296,11 +329,14 @@ class BeamStructSolver(StructSolver):
         cos_t, sin_t = np.cos(t_eval), np.sin(t_eval)
         m_1 = m_flap * cos_t + m_edge * sin_t     # bends in thickness direction
         m_2 = -m_flap * sin_t + m_edge * cos_t    # bends in chordwise direction
-        i_c = unit.i_chord * c_eval ** 4
-        i_t = unit.i_thick * c_eval ** 4
-        area_n = unit.area * c_eval ** 2
-        sigma_bend = (np.abs(m_1) * unit.d_thick * c_eval / i_c
-                      + np.abs(m_2) * unit.d_chord * c_eval / i_t)
+        u_eval = self._unit_at(c_eval)
+        i_c = np.array([u.i_chord for u in u_eval]) * c_eval ** 4
+        i_t = np.array([u.i_thick for u in u_eval]) * c_eval ** 4
+        area_n = np.array([u.area for u in u_eval]) * c_eval ** 2
+        d_t = np.array([u.d_thick for u in u_eval])
+        d_c = np.array([u.d_chord for u in u_eval])
+        sigma_bend = (np.abs(m_1) * d_t * c_eval / i_c
+                      + np.abs(m_2) * d_c * c_eval / i_t)
         kt = np.ones_like(sigma_bend)
         kt[0] = self._kt                           # root/hub junction guard
         sigma = n_node[:-1] / area_n + kt * sigma_bend
