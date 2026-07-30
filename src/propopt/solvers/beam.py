@@ -96,6 +96,14 @@ PLA = Material("PLA (printed; isotropic first-pass)", MAT_DENSITY, 3.5e9, 50.0e6
 
 KT_ROOT_DEFAULT = 2.5  # root stress-concentration guard, see module docstring
 
+# 3-point Gauss-Legendre on [-1, 1]. Used to span-average section properties
+# that a blunt trailing edge makes non-polynomial in chord (see
+# BeamStructSolver._element_props). Exact for polynomials up to degree 5, which
+# matters because the sharp-TE case is exactly QUARTIC in the running chord —
+# so this rule reproduces the pre-TE closed form rather than approximating it.
+_GAUSS3_XI = np.array([-np.sqrt(3.0 / 5.0), 0.0, np.sqrt(3.0 / 5.0)])
+_GAUSS3_W = np.array([5.0 / 9.0, 8.0 / 9.0, 5.0 / 9.0])
+
 
 @dataclass(frozen=True)
 class UnitSection:
@@ -246,6 +254,30 @@ class BeamStructSolver(StructSolver):
         self._n_harm = int(n_harmonics)
         self._te = float(te_thickness_m)
         self._unit = unit_section_properties(section, n_chord)
+        # Exact polygon-consistent area decomposition. The wedge adds
+        # te_norm * integral(S) to the normalized area, so the normalized area
+        # is EXACTLY LINEAR in te_norm (verified: dA/d(te_norm) is constant to
+        # 10 digits). Taking the slope from the polygon rather than from the
+        # analytic 0.5*(1-x_tmax) keeps the beam consistent with the LOFT,
+        # which is the faceted polygon and is the mass of record.
+        self._a_base = self._unit.area
+        probe = 0.02
+        self._k_area = (unit_section_properties(section, n_chord, probe).area
+                        - self._a_base) / probe
+
+    def _area_abs(self, chord: np.ndarray) -> np.ndarray:
+        """Absolute section area (m^2). EXACT for any chord:
+        A(c) = A_base*c^2 + k_area*te*c  (the wedge's height is absolute, so it
+        contributes at order c^1, not c^2)."""
+        c = np.asarray(chord, dtype=float)
+        return self._a_base * c ** 2 + self._k_area * self._te * c
+
+    def _i_chord_abs(self, chord: np.ndarray) -> np.ndarray:
+        """Absolute flapwise second moment (m^4), evaluated pointwise from the
+        polygon at each chord's own te/c. No closed form exists across the span
+        (see _element_props)."""
+        return np.array([u.i_chord for u in self._unit_at(np.atleast_1d(chord))]) \
+            * np.asarray(chord, dtype=float) ** 4
 
     def _unit_at(self, chord: np.ndarray) -> list[UnitSection]:
         """Per-station unit-section constants. With an ABSOLUTE trailing-edge
@@ -285,17 +317,28 @@ class BeamStructSolver(StructSolver):
             area_e = self._unit.area * c2
             ei_e = self._mat.elastic_modulus_Pa * self._unit.i_chord * c4
             return area_e, ei_e
-        # Blunt TE: the normalized section varies along the span, so the
-        # span-exact c^2 / c^4 averages no longer factor out. Fall back to the
-        # trapezoidal mean of the absolute per-node properties (exact only in
-        # the limit of fine stations) — the loft volume stays the mass of
-        # record, and the beam-vs-loft mass check reports the residual.
-        units = self._unit_at(c_nodes)
-        area_n = np.array([u.area for u in units]) * c_nodes ** 2
-        i_n = np.array([u.i_chord for u in units]) * c_nodes ** 4
-        area_e = 0.5 * (area_n[:-1] + area_n[1:])
-        ei_e = self._mat.elastic_modulus_Pa * 0.5 * (i_n[:-1] + i_n[1:])
-        return area_e, ei_e
+        # --- blunt TE: the normalized section varies along the span ---
+        # AREA is still exact. A(c) = A_base*c^2 + k_area*te*c is a polynomial
+        # in c, and c is linear along the element, so both terms have exact
+        # span-averages: mean(c^2) = (ci^2+ci*cj+cj^2)/3 (already computed) and
+        # mean(c) = (ci+cj)/2.
+        area_e = self._a_base * c2 + self._k_area * self._te * 0.5 * (ci + cj)
+
+        # SECOND MOMENT has NO exact closed form. I_centroidal = I0 - Q^2/A;
+        # with a blunt TE the absolute I0, Q and A are polynomials in c of
+        # different degrees, so their combination is a RATIONAL function of c,
+        # not a polynomial, and no finite span-average formula exists. (The
+        # centroid-shift term is not negligible either: A*ybar^2 is ~51% of I0
+        # for this section, so it cannot simply be dropped to recover a
+        # polynomial.) Instead integrate exactly-evaluated pointwise values
+        # with 3-point Gauss-Legendre, which is exact to degree 5 and therefore
+        # still EXACT for the sharp-TE quartic — the approximation applies only
+        # to the rational correction the blunt TE introduces.
+        xi = 0.5 * (_GAUSS3_XI[:, None] + 1.0)                 # (3, n_elem)
+        c_gauss = ci[None, :] + (cj - ci)[None, :] * xi
+        i_gauss = np.stack([self._i_chord_abs(row) for row in c_gauss])
+        i_e = 0.5 * np.einsum("g,gj->j", _GAUSS3_W, i_gauss)
+        return area_e, self._mat.elastic_modulus_Pa * i_e
 
     # -- main -----------------------------------------------------------------
 

@@ -532,17 +532,54 @@ rather than requiring a correlation. Until then, treat blunt-TE designs' drag,
 power and FoM as optimistic and do not read the TE-enabled thrust/SF gains as
 purely physical.
 
-### Known limitation: beam-vs-loft mass consistency degrades with TE active
-Worst-case `|beam - loft|/loft` over 100 random twisted genomes: **3.40%**
-(sharp TE) -> **11.46%** (0.4 mm TE). Diagnosed, not yet fixed. The cause is
-NOT the TE geometry: with a blunt TE the beam's span-exact `c^2`/`c^4` averages
-no longer factor out, so `_element_props` falls back to a trapezoidal mean of
-per-node absolute properties, and on a strongly tapered element (30 -> 12 mm)
-the trapezoid mean of `c^2` sits **+11.54%** above the exact
-`(ci^2 + ci*cj + cj^2)/3` — matching the observed 11.46% almost exactly. The
-fix is analytic and available: the blunt-TE area decomposes exactly as
-`A_base*c^2 + 0.5*(1-x_tmax)*te*c` (verified to 0.13%, the residual being
-polygon discretization at n_chord=25), so both terms have exact span-averages
-(`mean(c^2)` as before, `mean(c) = (ci+cj)/2`). Deferred deliberately. The
-LOFT volume remains the mass of record for the objective, so the optimizer is
-unaffected; only the beam's internal consistency diagnostic degrades.
+### Fixed: beam-vs-loft mass consistency with TE active (was 11.46%, restored to ~3.3%)
+The blunt TE initially broke the beam's span-exact `c^2`/`c^4` averaging and fell
+back to a trapezoidal mean of per-node absolute properties, which biased worst-case
+`|beam - loft|/loft` from 3.40% (sharp TE) to 11.46% (0.4 mm TE) over 100 random
+twisted genomes. Fixed with an exact decomposition, not a tuned correction:
+
+- **Area is exactly linear in TE thickness.** `A(c) = A_base*c^2 + k_area*te*c`
+  holds identically (measured dA/d(te_norm) constant to 10 digits), so both
+  terms have exact span-averages over a linearly tapered element:
+  `mean(c^2) = (ci^2+ci*cj+cj^2)/3`, `mean(c) = (ci+cj)/2`. `k_area` is taken
+  from the POLYGON (not the analytic `0.5*(1-x_tmax)`), so the beam stays
+  consistent with the loft, which is the faceted polygon and the mass of record.
+- **The second moment I has NO closed form** — and this is a real
+  distinction, not just more work. `I_centroidal = I0 - Q^2/A`, and with a
+  blunt TE, `I0`, `Q`, `A` are polynomials in chord of DIFFERENT degrees, so
+  their combination is a RATIONAL function of chord, not a polynomial; no
+  finite span-average formula exists. The centroid-shift term `A*ybar^2` is
+  ~51% of `I0` for this section, so it cannot be dropped to force a
+  polynomial either. Used instead: **3-point Gauss-Legendre** quadrature on
+  pointwise-exact values per element. This is exact to degree 5, and the
+  sharp-TE case is exactly quartic in chord, so the sharp-TE closed form is
+  reproduced EXACTLY (measured rel err 0.00e+00), not merely approximated;
+  the rational blunt-TE correction is resolved to ~2.9e-11 against a
+  20-point reference.
+- **Residual, kept separate from the averaging fix (as it should be):**
+  +0.128% between the polygon's numerical `k_area` and the analytic
+  `0.5*(1-x_tmax)` — this is n_chord=25 faceting the beam deliberately
+  inherits to match the loft, not an averaging error, and it does not
+  change with this fix.
+
+Result: worst-case beam-vs-loft mass with TE active is **3.29%** (n=100),
+at or below the pre-TE 3.40% baseline. Station-refinement is also tighter at
+every count (e.g. 2.51% vs 3.40% at n=4 stations).
+
+**Impact on results is small, and corrects the direction, not just the
+magnitude.** Across the exploration front (60/60 designs, seed 0) the
+trapezoidal error was NOT optimistic on safety factor — it was mildly
+CONSERVATIVE: SF rose (never fell) by up to +2.80% (median +0.16%) under the
+exact fix, because the old over-estimated area over-estimated centrifugal
+tension and therefore stress. `f1` shifted -1.70% to +0.87% (median -0.48%);
+the negative shifts move toward resonance, which is the one genuinely
+non-conservative direction here, but no design changed feasibility on either
+SF (>=1) or the resonance-margin constraint (>=0.15) at the current bounds —
+0 infeasible under either formulation, 0 newly infeasible.
+
+**Exported fronts on disk predate this fix.** `runs/decision/front.json` and
+`runs/my_run/front.json` (gitignored, not part of this commit) were produced
+before the exact-averaging correction landed; a fresh decision-mode run would
+differ slightly — mainly a small relaxation of SF near the constraint
+boundary, per the shifts above. Re-run `run_demo.py` for figures that reflect
+the corrected beam.

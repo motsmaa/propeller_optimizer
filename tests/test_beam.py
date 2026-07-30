@@ -184,3 +184,78 @@ def test_mass_consistency_with_geometry():
             checked += 1
             assert a.beam_mass_kg == pytest.approx(a.mass_kg, rel=0.05)
     assert checked > 80  # the sweep must actually exercise the check
+
+
+# --- exact span-averaged section properties with a blunt TE ---------------- #
+
+def test_te_zero_section_path_is_pinned():
+    """te=0 must keep running the pre-TE span-exact closed form. Pinned at full
+    precision: the zero branch is untouched code, so any drift means the blunt-TE
+    work leaked into the sharp-TE path."""
+    d = make_design()
+    a = BeamStructSolver(aero=BEMTAeroSolver(), te_thickness_m=0.0).analyze(d)
+    assert a.safety_factor == pytest.approx(3.6097254650763246, rel=1e-12)
+    assert a.f1_hz == pytest.approx(122.43263498808244, rel=1e-12)
+
+
+def test_blunt_te_area_is_exact_not_trapezoidal():
+    """A(c) = A_base*c^2 + k_area*te*c is EXACT (the normalized area is exactly
+    linear in te/c), so the element average must reproduce the analytic integral
+    of A over a linearly tapered element — not the trapezoidal mean, which
+    over-estimates c^2 by up to ~11.5% on a strong taper."""
+    te = 4.0e-4
+    s = BeamStructSolver(te_thickness_m=te)
+    ci, cj = 0.030, 0.012
+    c_nodes = np.array([ci, cj])
+    area_e, _ = s._element_props(c_nodes)
+    exact = s._a_base * (ci**2 + ci*cj + cj**2) / 3.0 + s._k_area * te * 0.5 * (ci + cj)
+    assert area_e[0] == pytest.approx(exact, rel=1e-14)
+    trapezoid = 0.5 * (s._area_abs(ci) + s._area_abs(cj))
+    assert trapezoid > area_e[0]                      # the old bias, upward
+    assert trapezoid / area_e[0] - 1 > 0.05           # ~11.5% on this taper
+
+
+def test_gauss3_is_exact_for_the_sharp_te_quartic():
+    """The EI quadrature must not degrade the sharp-TE case: I ~ c^4 with c
+    linear in r is a quartic, and 3-point Gauss is exact to degree 5."""
+    ci, cj = 0.030, 0.012
+    xi = 0.5 * (np.array([-np.sqrt(3/5), 0.0, np.sqrt(3/5)]) + 1.0)
+    w = np.array([5/9, 8/9, 5/9])
+    cg = ci + (cj - ci) * xi
+    exact_c4 = (ci**4 + ci**3*cj + ci**2*cj**2 + ci*cj**3 + cj**4) / 5.0
+    assert 0.5 * np.sum(w * cg**4) == pytest.approx(exact_c4, rel=1e-14)
+
+
+def test_blunt_te_ei_quadrature_error_is_negligible():
+    """For the rational (blunt-TE) part there is no closed form; check the
+    3-point rule against a 20-point reference on the same element."""
+    s = BeamStructSolver(te_thickness_m=4.0e-4)
+    ci, cj = 0.030, 0.012
+    xi = 0.5 * (np.array([-np.sqrt(3/5), 0.0, np.sqrt(3/5)]) + 1.0)
+    w = np.array([5/9, 8/9, 5/9])
+    got = 0.5 * np.sum(w * s._i_chord_abs(ci + (cj - ci) * xi))
+    xr, wr = np.polynomial.legendre.leggauss(20)
+    ref = 0.5 * np.sum(wr * s._i_chord_abs(ci + (cj - ci) * 0.5 * (xr + 1.0)))
+    assert abs(got - ref) / ref < 1e-8               # measured ~3e-11
+
+
+def test_blunt_te_mass_consistency_restored():
+    """Worst-case beam-vs-loft mass with the TE active must return to the
+    sharp-TE level. The residual that remains is the twist/faceting effect
+    (the loft is a faceted solid), NOT an averaging error."""
+    te = 4.0e-4
+    solver = BeamStructSolver(aero=BEMTAeroSolver(), te_thickness_m=te)
+    rng = np.random.default_rng(0)
+    worst, checked = 0.0, 0
+    for n_st in (4, 6, 8, 10):
+        spec = radial_spec(n_stations=n_st, motor=None, chord_bounds=(0.007, 0.030))
+        for _ in range(25):
+            d = spec.decode(spec.xl + rng.random(spec.n_var) * (spec.xu - spec.xl))
+            try:
+                a = solver.analyze(d)
+            except SolverError:
+                continue
+            checked += 1
+            worst = max(worst, abs(a.beam_mass_kg - a.mass_kg) / a.mass_kg)
+    assert checked > 80
+    assert worst < 0.04, f"worst {worst:.3%} (sharp-TE baseline ~3.4%)"
