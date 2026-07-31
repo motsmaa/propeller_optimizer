@@ -12,6 +12,7 @@ src/propopt/
   hf/               Phase 4a: high-fidelity validators (NOT the inner loop)
     wsl.py          Windows<->WSL boundary: path translation + subprocess (4b reuses)
     mesh.py         STL -> tet mesh via gmsh; volume-drift + quality gates
+    occ_geometry.py slice 2: blade as an OCC B-rep solid + native tet meshing
     calculix.py     INP writer, ccx runner, .dat parser, CalculiXStructSolver
     SOURCE.md       toolchain provenance (ccx 2.21, gmsh 4.15.2, install route)
   config.py         Phase 3: RunConfig (frozen) + build_run/run; single source of truth
@@ -583,3 +584,57 @@ before the exact-averaging correction landed; a fresh decision-mode run would
 differ slightly — mainly a small relaxation of SF near the constraint
 boundary, per the shifts above. Re-run `run_demo.py` for figures that reflect
 the corrected beam.
+
+## Phase 4a slice 2: OCC B-rep geometry for the HF path
+
+A fillet is a B-rep operation — it cannot be applied to a triangle mesh — so the
+root-fillet work needs a real CAD solid. `hf/occ_geometry.py` builds the blade
+with gmsh's **bundled** OpenCASCADE kernel (`gmsh.model.occ`): no new dependency,
+no STEP round-trip, and gmsh meshes the B-rep natively so there is no STL
+intermediate.
+
+**Two representations of the same design, and which is of record.** The
+optimizer keeps using the triangle loft, which remains the **mass of record**;
+the HF path uses the OCC solid. They are not different blades — they are the
+same station data at different discretization orders, converging to the same
+smooth swept limit:
+
+| stations | triangle loft vs smooth | OCC vs smooth |
+|---|---|---|
+| 4  | +0.943% | -0.470% |
+| 8  | +0.631% | -0.104% |
+| 16 | +0.347% | -0.0246% |
+| 32 | +0.181% | -0.0060% |
+| 64 | +0.092% | -0.0015% |
+
+The loft converges **O(1/n)**, OCC **O(1/n^2)**. So the OCC-vs-loft gap is
+dominated by the LOFT's first-order error, not by an OCC defect.
+
+**Measured fidelity band** over 20 designs spanning the genome bounds
+(te = 0.4 mm): median **-0.0000%**, worst **1.52%**, range -1.52% .. +0.95%,
+**0/20 lofting failures**, ~0.12-0.19 s per construction. The difference is
+driven by spanwise twist VARIATION and nothing else — with constant twist (any
+value) or taper-only, OCC and the loft agree to **0.000000%**, which is what
+proves sections, stations, TE treatment, placement and caps are genuinely
+shared rather than merely similar. (Note the sign: the loft is LARGER than
+smooth, consistent with the Phase-2b measurement that the triangulated loft
+encloses more volume than the smooth extrusion.)
+
+**Why the band does not propagate into the optimizer.** The HF path exists to
+extract a DIMENSIONLESS ratio — a stress-concentration factor Kt — not absolute
+stresses. A ratio taken within one representation is insensitive to a global
+volume offset between representations. More specifically, the root is exactly
+identical between the two: station 0 is a design station (the hub end-extension
+holds chord and twist constant), so the root element's ruled patch is untwisted
+and OCC and the loft agree there **exactly**. Measured on a high-twist design,
+the root element carries **0.0%** of the total volume difference while holding
+15.3% of the volume; the whole gap is mid-span (elements 1-5, -1.12% to -1.20%
+each). Root cross-section area agrees analytic == loft cap == OCC kernel face to
+**4.4e-16** relative. Kt is therefore read from geometry that is common to both.
+
+**Sharp trailing edges are unsupported in the HF path.** `te_thickness_m = 0`
+gives a CUSPED profile wire (upper and lower surfaces meeting at zero included
+angle) — the degeneracy a B-rep kernel handles worst, and the same one that made
+gmsh's STL remesh mode fail outright in the first 4a slice. Rather than leave it
+to fail deep inside OCC with an opaque message, `station_rings` raises
+`SolverError` up front. The adopted 0.4 mm default avoids it.

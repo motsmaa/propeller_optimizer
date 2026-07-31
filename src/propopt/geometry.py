@@ -335,6 +335,16 @@ def solid_from_design(design: PropellerDesign,
     clipped to [hub, R]) — domain consistency between aero and geometry.
     End-holding matches the quadrature's treatment of the outer half-cells
     (station properties extended over their whole cell)."""
+    r, c, t = extended_stations(design)
+    return build_blade_solid(r, c, t, section, n_chord, te_thickness_m)
+
+
+def extended_stations(design: PropellerDesign):
+    """(radii, chord, twist) after end-extension to [hub_radius_m, radius_m].
+
+    The ONE definition of where a blade's sections sit — the triangle loft and
+    the Phase-4 OCC construction both read it, so an HF solid cannot silently
+    drift from the geometry the optimizer scored."""
     r = np.asarray(design.station_r_m, dtype=float)
     c = np.asarray(design.chord_m, dtype=float)
     t = np.asarray(design.twist_rad, dtype=float)
@@ -344,4 +354,4 @@ def solid_from_design(design: PropellerDesign,
     if r[-1] < design.radius_m:
         r = np.concatenate([r, [design.radius_m]])
         c, t = np.concatenate([c, [c[-1]]]), np.concatenate([t, [t[-1]]])
-    return build_blade_solid(r, c, t, section, n_chord, te_thickness_m)
+    return r, c, t
