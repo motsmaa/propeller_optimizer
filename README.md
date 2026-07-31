@@ -13,6 +13,7 @@ src/propopt/
     wsl.py          Windows<->WSL boundary: path translation + subprocess (4b reuses)
     mesh.py         STL -> tet mesh via gmsh; volume-drift + quality gates
     occ_geometry.py slice 2: blade as an OCC B-rep solid + native tet meshing
+    hub_fillet.py   slice 3a: hub boss + root fillet; derived bounds, validity
     calculix.py     INP writer, ccx runner, .dat parser, CalculiXStructSolver
     SOURCE.md       toolchain provenance (ccx 2.21, gmsh 4.15.2, install route)
   config.py         Phase 3: RunConfig (frozen) + build_run/run; single source of truth
@@ -638,3 +639,67 @@ angle) — the degeneracy a B-rep kernel handles worst, and the same one that ma
 gmsh's STL remesh mode fail outright in the first 4a slice. Rather than leave it
 to fail deep inside OCC with an opaque message, `station_rings` raises
 `SolverError` up front. The adopted 0.4 mm default avoids it.
+
+### Fillet geometry validation (slice 3a)
+
+**`occ.getMass` is unreliable on a filleted solid; the mesh is authoritative.**
+It is exact on the FUSED solid (agrees with a converged tet mesh to ~3e-6
+relative) but wrong once the junction is filleted. Two independent proofs that
+this is an artifact rather than real material: the implied dV depends on the
+HUB PLATE SIZE (+31.26 mm^3 on a 2.0x1.0-chord plate vs +12.67 mm^3 on a
+1.0x0.4 plate — same blade, same junction, same radius, and a *local* fillet
+cannot do that), and the wrong value survives a BREP write and re-read in a
+fresh session, so it is baked into the shape rather than stale session state.
+`build_filleted` therefore returns it as `occ_volume_m3_unreliable`; anything
+needing a volume must mesh. A guard test asserts the plate-size dependence, so
+if a future gmsh/OCC fixes this the test fails loudly.
+
+**The blend itself is geometrically correct.** Measured from the surface mesh
+by cutting planes perpendicular to the junction and fitting a circle through
+the blend quadrant — a procedure first validated on a box-on-plate control,
+where it recovers the requested radius exactly:
+
+| station | r = 0.100 mm | r = 0.200 mm |
+|---|---|---|
+| control (box on plate) | 0.10000 (0.00%) | 0.20000 (0.00%) |
+| blade mid-chord | 0.10000 (-0.00%) | 0.20004 (+0.02%) |
+| blade near-TE | 0.09999 (-0.01%) | 0.19999 (-0.00%) |
+| blade LE region | 0.08794 (-12.1%) | 0.17298 (-13.5%) |
+
+**No trailing-edge collapse**: even at r = 0.200 mm = te_thickness_m/2 exactly
+— the theoretical limit where the upper and lower blends meet — the near-TE
+station still fits the requested radius to 0.00%. The leading-edge fit reads
+12-14% low, but that is a MEASUREMENT artifact of fitting a circle across a
+sharply curved junction (nose radius 0.473 mm vs r = 0.1-0.2 mm), not real
+distortion: the LE band's fillet VOLUME is 0.98x ideal, whereas a genuinely
+13%-under-radius blend would carry ~0.76x.
+
+**Fillet volume is uniform and follows the rolling-ball law.** Classifying tets
+that lie above the junction plane and outside the root section (the blade
+section is exactly constant over that band, since chord and twist are held from
+the hub out to the first design station):
+
+| band | volume | share | vs ideal (1-pi/4)r^2 L |
+|---|---|---|---|
+| LE (u < 0.15) | 0.0822 mm^3 | 16.5% | 0.98x |
+| mid (0.15-0.75) | 0.2888 mm^3 | 58.1% | 0.93x |
+| TE (u >= 0.75) | 0.1264 mm^3 | 25.4% | 0.95x |
+| **total** | **0.4974 mm^3** | | **0.94x** |
+
+There is no dV excess anywhere — every band sits slightly BELOW the ideal
+90-degree-corner law, as expected where the blade meets the plate at an obtuse
+angle. (An earlier coarse-mesh estimate of ~1.8x was itself mesh error: the
+fillet is 0.2 mm and that mesh was 1 mm, so the feature was smaller than one
+element.)
+
+**The spline-profile junction path is rejected.** Replacing the faceted
+polyline profile with a closed BSpline gives only 2 junction curves instead of
+49, but their total length is 122.7 mm = exactly 2x the section perimeter — the
+junction loop is represented TWICE. Its `getMass` dV goes negative (a concave
+fillet cannot remove material) and its mesh dV is +166 mm^3. The polyline
+profile is the sound route.
+
+**Method note carried forward:** never identify post-boolean entities by
+diffing tag sets — OCC re-tags modified entities, which silently corrupted an
+earlier audit (it reported a 1410 mm "blend radius" and a 46x-too-large face
+area). Query post-fillet entities fresh instead.
