@@ -156,6 +156,33 @@ def section_polygon(section: SectionFn, n_chord: int,
     return np.stack([px, py], axis=1)
 
 
+def section_thickness(section: SectionFn, n_chord: int,
+                      te_thickness_norm: float = 0.0) -> np.ndarray:
+    """Local thickness of the section, read off the SAME polygon the loft uses.
+
+    Returns (n_chord, 2): chord-normalized chordwise position and local
+    thickness (upper minus lower at that station), both in units of chord. The
+    leading-edge entry is identically zero (the surfaces meet there); the
+    trailing-edge entry is exactly `te_thickness_norm`.
+
+    This is the one definition of "how thick is the blade here". The root
+    fillet's geometric bound (`hf.hub_fillet`) and the beam's root r/t
+    (`solvers.beam`) both read it, so neither can drift from the lofted solid
+    or from each other when the section, the chordwise sampling, or the
+    trailing-edge thickness changes.
+    """
+    poly = section_polygon(section, n_chord, te_thickness_norm)
+    k = n_chord
+    p = len(poly)                                    # 2k-2 sharp, 2k-1 blunt
+    blunt = p == 2 * k - 1
+    x, y = poly[:, 0], poly[:, 1]
+    # polygon layout: LE, lower surface, TE-lower, [TE-upper,] upper reversed.
+    # A sharp TE shares one vertex between the two surfaces; a blunt TE has two.
+    lower = np.concatenate([[0], np.arange(1, k - 1), [k - 1]])
+    upper = np.concatenate([[0], p - np.arange(1, k - 1), [k if blunt else k - 1]])
+    return np.column_stack([x[lower], y[upper] - y[lower]])
+
+
 def polygon_area(poly: np.ndarray) -> float:
     """Shoelace area (positive for CCW)."""
     x, y = poly[:, 0], poly[:, 1]

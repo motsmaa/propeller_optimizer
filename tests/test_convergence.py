@@ -10,10 +10,15 @@ from propopt.configs.default import default_config
 
 pytestmark = pytest.mark.slow
 
-# Measured 5-seed final-HV rel-spread: 25.1% at pop60/gen40 with the 7 mm
-# chord bound + 0.4 mm TE (was ~18% at the old 5 mm bound). 0.35 gives headroom
-# for run-to-run variance while still catching a broken/divergent run.
-SEED_SPREAD_LIMIT = 0.35
+# Measured 5-seed final-HV rel-spread at pop60/gen40 with the 7 mm chord bound
+# + 0.4 mm TE: 12.2% under the corrected root Kt (was 25.1% under the old
+# single-kt_root model, and ~18% before that at the 5 mm bound). The spread
+# HALVED because amplifying the centrifugal term shrank and sharpened the
+# feasible region — the seeds now agree with each other more, even though each
+# run is individually further from its own asymptote (see README Phase-4a
+# slice 3c). 0.25 keeps ~2x headroom on the measured value while still catching
+# a broken or divergent run.
+SEED_SPREAD_LIMIT = 0.25
 
 
 def test_hv_monotonic_within_seed_and_seed_spread_bounded():

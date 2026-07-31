@@ -1,23 +1,25 @@
 """Phase-4a slice 3b: 2-D plane-strain stress-concentration models.
 
-PURPOSE: produce a Kt(r/t) DESIGN CURVE for the blade-root fillet, so
-`beam.py`'s `kt_root` can be selected by intended manufacturing radius rather
-than left at the 2.5 placeholder. This module does NOT change `kt_root`.
+PURPOSE: produce the Kt(r/t) DESIGN CURVES for the blade-root fillet, so
+`beam.py`'s root guard is selected by intended manufacturing radius rather than
+left at the old 2.5 placeholder. This module is the MEASURING INSTRUMENT; the
+resulting tables live in `propopt.kt_root`, which is what `beam.py` reads. Run
+this only to re-derive or extend those tables (it needs gmsh + CalculiX);
+nothing in the optimizer loop imports it.
 
-KT DEFINITION — COMPOSES WITH THE BEAM. `beam.py` computes
+KT DEFINITION — COMPOSES WITH THE BEAM. `beam.py` now computes
 
-    sigma = N/A + kt * sigma_bend
+    sigma = Kt_axial * N/A + Kt_bending * sigma_bend
 
-so `kt` multiplies the BENDING stress ONLY; the axial (centrifugal) term is
-not amplified. Kt here is therefore defined for a pure-BENDING load case:
+so each component is amplified by the factor measured for ITS OWN load case:
 
     Kt = sigma_peak(fillet surface) / sigma_nom(wall section)
 
 with both taken from the SAME 2-D model so any modelling bias cancels, and
-sigma_nom checked against the elementary 6M/t^2 that `beam.py` uses. An axial
-Kt is reported separately as a diagnostic — `beam.py` does not currently apply
-it, which is a modelling gap for the caller to weigh, not something this
-module changes.
+sigma_nom checked against the elementary 6M/t^2 (bending) or F/t (axial) that
+`beam.py` uses. `load="bending"` applies a pure moment; `load="axial"` applies
+uniform tension. Both are production curves — the axial one was previously
+reported as a diagnostic only, because the beam did not amplify N/A at all.
 
 UNITS: SI. Plane strain, unit out-of-plane depth, so forces are per metre.
 
@@ -478,7 +480,8 @@ def wall_on_plate_kt(t_m, r_m, *, load="bending", width_ratio=8.0,
     This IS the stepped-flat-bar geometry (width_ratio = D/d). `load="bending"`
     applies a PURE MOMENT (linear traction, zero net force and zero shear) —
     the case matching `beam.py`'s `sigma_bend`. `load="axial"` applies uniform
-    tension and is a diagnostic only, since `beam.py` does not amplify N/A."""
+    tension, matching `beam.py`'s centrifugal `N/A`. Both curves are shipped in
+    `propopt.kt_root`."""
     mat = material or Material("pla", 1240.0, 3.5e9, 50.0e6, poisson=0.35)
     t, r = float(t_m), float(r_m)
     if not 0.0 < r <= 0.5 * t:

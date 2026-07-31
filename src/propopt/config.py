@@ -42,7 +42,13 @@ class RunConfig:
     # --- physics ---
     motor: MotorSpec
     material: Material
-    kt_root: float
+    # Intended root fillet radius (m) — a MANUFACTURING INTENT, not a genome
+    # variable. It replaces the old single `kt_root` scalar: the beam now looks
+    # up SEPARATE measured axial and bending concentration factors at each
+    # design's own root r/t (see propopt.kt_root and solvers/beam.py). Changing
+    # this changes which part is being scored, so it belongs in the config
+    # echo, not in the search space.
+    root_fillet_radius_m: float
     # --- constraints ---
     min_thrust_N: float
     resonance_margin_min: float
@@ -93,6 +99,9 @@ class RunConfig:
         if not (np.isfinite(self.te_thickness_m) and self.te_thickness_m >= 0.0):
             raise ValueError(
                 f"te_thickness_m must be finite and >= 0, got {self.te_thickness_m!r}")
+        if not (np.isfinite(self.root_fillet_radius_m) and self.root_fillet_radius_m > 0.0):
+            raise ValueError("root_fillet_radius_m must be finite and > 0, got "
+                             f"{self.root_fillet_radius_m!r}")
         if self.mode not in ("exploration", "decision"):
             raise ValueError(f"mode must be exploration|decision, got {self.mode!r}")
         if len(self.seeds) < 1:
@@ -104,7 +113,8 @@ def build_run(cfg: RunConfig) -> tuple[ProblemSpec, BEMTAeroSolver, BeamStructSo
     instance is shared across the equilibrium root-find, aero, and the beam so
     its converged-state memo is reused (see bemt.py)."""
     aero = BEMTAeroSolver()
-    struct = BeamStructSolver(material=cfg.material, aero=aero, kt_root=cfg.kt_root,
+    struct = BeamStructSolver(material=cfg.material, aero=aero,
+                              root_fillet_radius_m=cfg.root_fillet_radius_m,
                               te_thickness_m=cfg.te_thickness_m)
     spec = radial_spec(
         n_stations=cfg.n_stations, radius_m=cfg.radius_m,

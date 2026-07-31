@@ -36,7 +36,8 @@ def test_mode_selects_seed_handling_only():
     from propopt.configs.default import exploration_config
     xp = exploration_config()
     shared = ("n_stations", "radius_m", "hub_radius_m", "n_blades", "chord_bounds",
-              "twist_bounds", "throttle_bounds", "motor", "material", "kt_root",
+              "twist_bounds", "throttle_bounds", "motor", "material",
+              "root_fillet_radius_m", "te_thickness_m",
               "min_thrust_N", "resonance_margin_min", "pop_size", "n_gen",
               "hv_ideal", "hv_nadir", "binding_tol_frac")
     for f in shared:

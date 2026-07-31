@@ -33,12 +33,27 @@ Campbell diagram (multiple mode shapes vs. rpm, all excitation orders) is
 Phase-4 material, once solid FEA is in the loop.
 
 Root stress concentration (REQUIRED GUARD): the 1-D model is blind to the
-3-D root/hub junction, so the root-node bending stress is multiplied by a
-documented factor KT_ROOT (default 2.5 — Peterson-type charts put unfilleted
-or small-fillet rectangular-to-hub junctions at Kt ~ 1.5-3; we take the
-conservative middle-high end). This is a CONSERVATIVE PLACEHOLDER to be
-calibrated against Phase-4 solid FEA — the optimizer must not be allowed to
-exploit a root the surrogate cannot see.
+3-D root/hub junction, so BOTH root-node stress components are amplified by
+MEASURED factors — see `propopt.kt_root` for the data and its provenance
+(Phase-4a slice 3b, 2-D plane-strain FEA, Kirsch-anchored):
+
+    sigma_root = Kt_axial * N/A + Kt_bending * sigma_bend
+
+The two factors differ substantially (at the default root ratio r/t = 0.056:
+Kt_bending = 2.41, Kt_axial = 3.47), so one shared number cannot represent
+both. Phase 2b used a single 2.5 placeholder on the BENDING term only and left
+the centrifugal N/A UNAMPLIFIED — the placeholder turned out to be within 4%
+(and on the conservative side) for bending, but the missing axial
+amplification was a real unconservatism at the root, where centrifugal tension
+is the larger contributor for a fast-spinning blade.
+
+Both factors are looked up at the design's OWN root ratio r/t, where t is the
+computed maximum thickness of the root section (it moves with chord, section
+and trailing-edge thickness) and r is `root_fillet_radius_m`. That radius is a
+MANUFACTURING INTENT, not a genome variable: the optimizer cannot trade it, and
+changing it changes what part is being scored. The 2-D basis is valid at
+mid-chord; the leading/trailing-edge regions approach plane stress and a 3-D
+confirmation is outstanding.
 
 Element properties are span-averages of the linearly-interpolated chord that
 the geometry loft uses (area ~ c^2 averaged exactly, EI ~ c^4 averaged
@@ -60,7 +75,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..contracts import PropellerDesign, SolverError, StructResult, StructSolver
-from ..geometry import DEFAULT_N_CHORD, DEFAULT_SECTION, SectionFn, section_polygon, solid_from_design
+from ..geometry import (DEFAULT_N_CHORD, DEFAULT_SECTION, SectionFn,
+                        section_polygon, section_thickness, solid_from_design)
+from ..kt_root import kt_factors
 from ..stations import station_weights
 from .bemt import BEMTAeroSolver
 from .null import MAT_DENSITY
@@ -94,7 +111,20 @@ class Material:
 PLA = Material("PLA (printed; isotropic first-pass)", MAT_DENSITY, 3.5e9, 50.0e6,
                poisson=0.35)
 
-KT_ROOT_DEFAULT = 2.5  # root stress-concentration guard, see module docstring
+# Intended root fillet radius (m). A MANUFACTURING INTENT, expressed as an
+# absolute length because that is what a machine holds — not a fraction of any
+# one design's chord. 0.20 mm is chosen for two independent reasons:
+#   (1) it is half the 0.40 mm nozzle/extrusion width, the smallest radius an
+#       FDM tool path can actually lay down as a blend rather than a step;
+#   (2) it is exactly the slice-3a geometric constructibility bound for the
+#       shipped section, r <= min(local thickness)/2 = te/2, so a fillet of
+#       this radius is provably buildable on the real solid rather than
+#       assumed. Raising the trailing-edge thickness raises that bound; LOWERING
+#       it can make this radius unbuildable, which is why BeamAnalysis reports
+#       the per-design bound alongside the ratio actually used.
+# It is deliberately NOT a genome variable: the optimizer must not be able to
+# buy safety factor by wishing for a bigger fillet.
+ROOT_FILLET_RADIUS_DEFAULT = 2.0e-4
 
 # 3-point Gauss-Legendre on [-1, 1]. Used to span-average section properties
 # that a blunt trailing edge makes non-polynomial in chord (see
@@ -229,6 +259,13 @@ class BeamAnalysis:
     excitation_hz: tuple[float, ...]  # blade-passing harmonics n*B*rpm/60
     resonance_margin: float    # min_n |f1 - f_n| / f_n
     tip_deflection_m: float
+    # root fillet state, reported so a caller can see WHICH point of the
+    # measured Kt curve this design landed on (see propopt.kt_root)
+    root_thickness_m: float = 0.0     # computed max thickness of the root section
+    root_r_over_t: float = 0.0        # fillet radius / root thickness
+    root_r_max_geom_m: float = 0.0    # constructibility bound, min(t_local)/2
+    kt_axial: float = 1.0
+    kt_bending: float = 1.0
 
 
 class BeamStructSolver(StructSolver):
@@ -239,16 +276,17 @@ class BeamStructSolver(StructSolver):
     def __init__(self,
                  material: Material = PLA,
                  aero: BEMTAeroSolver | None = None,
-                 kt_root: float = KT_ROOT_DEFAULT,
+                 root_fillet_radius_m: float = ROOT_FILLET_RADIUS_DEFAULT,
                  section: SectionFn = DEFAULT_SECTION,
                  n_chord: int = DEFAULT_N_CHORD,
                  n_harmonics: int = 3,
                  te_thickness_m: float = 0.0) -> None:
-        if kt_root < 1.0:
-            raise ValueError(f"kt_root must be >= 1, got {kt_root}")
+        if not (np.isfinite(root_fillet_radius_m) and root_fillet_radius_m > 0.0):
+            raise ValueError("root_fillet_radius_m must be positive and finite, "
+                             f"got {root_fillet_radius_m!r}")
         self._mat = material
         self._aero = aero if aero is not None else BEMTAeroSolver()
-        self._kt = float(kt_root)
+        self._r_fillet = float(root_fillet_radius_m)
         self._section = section
         self._n_chord = n_chord
         self._n_harm = int(n_harmonics)
@@ -289,6 +327,29 @@ class BeamStructSolver(StructSolver):
                 for ci in chord]
 
     # -- helpers --------------------------------------------------------------
+
+    def _root_fillet_state(self, c_root: float) -> dict:
+        """Where this design sits on the measured Kt curve.
+
+        `t` is the design's OWN root thickness — the maximum of the local
+        thickness distribution of the root section polygon, so it tracks chord,
+        the section function AND te_thickness_m (a blunt TE thickens the aft
+        region and can move the maximum). Nothing here is pinned to a
+        particular design or a particular trailing edge."""
+        if not (np.isfinite(c_root) and c_root > 0.0):
+            raise SolverError(f"non-physical root chord {c_root!r}")
+        thick = section_thickness(self._section, self._n_chord,
+                                  self._te / c_root)[:, 1] * c_root
+        t_root = float(thick.max())
+        if t_root <= 0.0:
+            raise SolverError("root section has zero thickness")
+        interior = thick[thick > 0.0]          # the LE vertex is identically 0
+        r_over_t = self._r_fillet / t_root
+        kt_ax, kt_bd = kt_factors(r_over_t)
+        return {"t": t_root, "r_over_t": r_over_t, "kt_axial": kt_ax,
+                "kt_bending": kt_bd,
+                # two fillets, one per face, collide when 2r > local thickness
+                "r_max_geom": 0.5 * float(interior.min()) if interior.size else 0.0}
 
     def _nodes(self, design: PropellerDesign):
         """Node radii [hub, stations..., R] (deduped ends) with end-held chord
@@ -380,9 +441,15 @@ class BeamStructSolver(StructSolver):
         d_c = np.array([u.d_chord for u in u_eval])
         sigma_bend = (np.abs(m_1) * d_t * c_eval / i_c
                       + np.abs(m_2) * d_c * c_eval / i_t)
-        kt = np.ones_like(sigma_bend)
-        kt[0] = self._kt                           # root/hub junction guard
-        sigma = n_node[:-1] / area_n + kt * sigma_bend
+        # root/hub junction guard: BOTH components are amplified, by their own
+        # measured factor (propopt.kt_root). Only the root node sees them —
+        # everywhere else the blade is a free prismatic section.
+        fil = self._root_fillet_state(float(c_n[0]))
+        kt_ax = np.ones_like(sigma_bend)
+        kt_bd = np.ones_like(sigma_bend)
+        kt_ax[0] = fil["kt_axial"]
+        kt_bd[0] = fil["kt_bending"]
+        sigma = kt_ax * n_node[:-1] / area_n + kt_bd * sigma_bend
         if not np.all(np.isfinite(sigma)):
             raise SolverError("non-finite beam stress")
         sigma_peak = float(np.max(sigma))
@@ -410,7 +477,9 @@ class BeamStructSolver(StructSolver):
         margin = min(abs(f1 - f) / f for f in harmonics)
 
         return BeamAnalysis(mass, beam_mass, safety_factor, sigma_peak,
-                            f1, harmonics, margin, tip_deflection)
+                            f1, harmonics, margin, tip_deflection,
+                            fil["t"], fil["r_over_t"], fil["r_max_geom"],
+                            fil["kt_axial"], fil["kt_bending"])
 
     def evaluate(self, design: PropellerDesign) -> StructResult:
         a = self.analyze(design)

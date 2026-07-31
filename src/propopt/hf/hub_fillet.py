@@ -1,9 +1,11 @@
 """Phase-4a slice 3a: blade + hub boss + root fillet, in OCC. HF path only.
 
-WHY: `kt_root` in the beam model is a documented placeholder (2.5). Calibrating
-it needs a root whose stress concentration is GEOMETRIC — produced by a
-finite-radius fillet — rather than the artifact of a clamped flat face that the
-slice-1/2 models produce. That requires a hub body and a real B-rep fillet.
+WHY: the beam model's root guard was a documented placeholder (kt_root = 2.5).
+Calibrating it needs a root whose stress concentration is GEOMETRIC — produced
+by a finite-radius fillet — rather than the artifact of a clamped flat face
+that the slice-1/2 models produce. That requires a hub body and a real B-rep
+fillet. (Slice 3b then measured the curves in 2-D; they ship in
+`propopt.kt_root` and the beam reads them.)
 
 NOTHING HERE IS HARDCODED TO THE CURRENT te_thickness_m OR TO ANY DESIGN.
 Every length is derived from the design's own geometry:
@@ -39,7 +41,7 @@ import numpy as np
 
 from ..contracts import PropellerDesign, SolverError
 from ..geometry import (DEFAULT_N_CHORD, DEFAULT_SECTION, SectionFn,
-                        extended_stations, section_polygon)
+                        extended_stations, section_thickness)
 from .mesh import TetMesh, _extract, tet_volumes
 from .occ_geometry import _build_occ_solid, station_rings
 
@@ -120,18 +122,12 @@ def root_thickness_distribution(design: PropellerDesign,
     """Local blade thickness (m) at each chordwise sample of the ROOT section.
 
     Read off the same polygon the loft and the OCC solid use, so it tracks
-    te_thickness_m, chord and the section function automatically."""
+    te_thickness_m, chord and the section function automatically. The
+    normalized read is `geometry.section_thickness` — shared with the beam's
+    root r/t so the two cannot drift apart."""
     _, c, _ = extended_stations(design)
     c_root = float(c[0])
-    poly = section_polygon(section, n_chord, te_thickness_m / c_root)
-    k = n_chord
-    # polygon layout: LE, lower surface, TE-lower, TE-upper, upper reversed
-    x = poly[:, 0]
-    y = poly[:, 1]
-    lower = np.concatenate([[0], np.arange(1, k - 1), [k - 1]])
-    upper = np.concatenate([[0], (2 * k - 1) - np.arange(1, k - 1), [k]])
-    thick = (y[upper] - y[lower]) * c_root
-    return np.column_stack([x[lower] * c_root, thick])   # (k, 2): chordwise pos, t
+    return section_thickness(section, n_chord, te_thickness_m / c_root) * c_root
 
 
 def analytic_fillet_bound(design: PropellerDesign,

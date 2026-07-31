@@ -191,11 +191,22 @@ def test_mass_consistency_with_geometry():
 def test_te_zero_section_path_is_pinned():
     """te=0 must keep running the pre-TE span-exact closed form. Pinned at full
     precision: the zero branch is untouched code, so any drift means the blunt-TE
-    work leaked into the sharp-TE path."""
+    work leaked into the sharp-TE path.
+
+    RE-PINNED once, when the root guard moved from a single kt_root=2.5 on the
+    bending term to the MEASURED pair (Kt_axial, Kt_bending) on both terms:
+    3.6097254650763246 -> 3.2212810180636900, a 10.8% reduction. That is a
+    deliberate physics change, not drift — this design's root (2.869 mm thick)
+    sits at r/t = 0.0697, where Kt_bending = 2.2262 (vs the 2.5 placeholder, so
+    the bending term EASED) and Kt_axial = 3.1768 (vs 1.0, i.e. the centrifugal
+    term was previously unamplified). f1 is UNCHANGED to full
+    precision, which is the check that only the stress composition moved:
+    Kt never enters the mass, stiffness or eigenproblem."""
     d = make_design()
     a = BeamStructSolver(aero=BEMTAeroSolver(), te_thickness_m=0.0).analyze(d)
-    assert a.safety_factor == pytest.approx(3.6097254650763246, rel=1e-12)
+    assert a.safety_factor == pytest.approx(3.2212810180636900, rel=1e-12)
     assert a.f1_hz == pytest.approx(122.43263498808244, rel=1e-12)
+    assert a.root_r_over_t == pytest.approx(0.06970, rel=1e-3)
 
 
 def test_blunt_te_area_is_exact_not_trapezoidal():

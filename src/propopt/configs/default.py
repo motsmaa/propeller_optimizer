@@ -46,8 +46,23 @@ def exploration_config() -> RunConfig:
         motor=DEFAULT_MOTOR,   # 2216-class 950KV/3S; sets the rpm band and
                                # hence the whole front (see motor.py).
         material=PLA,          # printed PLA, isotropic first-pass (see beam.py).
-        kt_root=2.5,           # conservative root stress-concentration guard,
-                               # placeholder for Phase-4 FEA (see beam.py).
+        root_fillet_radius_m=2.0e-4,
+                               # 0.20 mm intended root fillet. Sets the root
+                               # stress concentration: the beam looks up
+                               # MEASURED Kt_axial and Kt_bending at this
+                               # design's own r/t (see propopt.kt_root, from
+                               # Phase-4a slice 3b 2-D plane-strain FEA). Two
+                               # independent reasons for this radius: half a
+                               # 0.40 mm extrusion width is the smallest blend
+                               # an FDM tool path can lay, and it is exactly the
+                               # slice-3a constructibility bound te/2 for the
+                               # 0.40 mm trailing edge below, so it is provably
+                               # buildable on the real solid. At the demo
+                               # front's root chords this lands at r/t ~ 0.056
+                               # -> Kt_bending 2.41, Kt_axial 3.47. It replaces
+                               # the old kt_root=2.5 placeholder, which was ~4%
+                               # conservative on bending but left the
+                               # centrifugal term entirely unamplified.
         te_thickness_m=4.0e-4, # 0.40 mm blunt trailing edge. TWO independent
                                # reasons for this exact value: (1) one 0.4 mm
                                # nozzle/extrusion width is the FDM

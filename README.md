@@ -170,7 +170,9 @@ numpy-only): centrifugal tension (stressing + stress-stiffening), static
 bending from the BEMT per-blade spanwise loads (`BEMTAeroSolver.
 spanwise_loads`, the aero->structure seam), extreme-fiber stress with a
 documented root stress-concentration guard (Kt=2.5, conservative placeholder
-until Phase-4 FEA calibrates it), SF = yield/peak. Modal: first flapwise
+until Phase-4 FEA calibrates it — **SUPERSEDED**, see "Phase 4a slice 3b/3c"
+below: measured factors now amplify BOTH stress components), SF = yield/peak.
+Modal: first flapwise
 frequency with centrifugal stiffening + resonance margin vs blade-passing
 harmonics (currently REPORTED only; contract extension pending approval).
 Material is an explicit parameter — default PLA (E=3.5 GPa, yield=50 MPa,
@@ -331,6 +333,10 @@ HV rises monotonically within every seed, reaching 99% of its gen-40 value by
 exploration-grade; for decision-grade, aggregate >=5 seeds or raise pop.
 **Recommendation: pop 60 / gen 40** (baked into `default.py`) as the
 budget-fitting near-converged setting.
+
+> **Re-measured under the corrected root Kt** (see "Phase 4a slice 3b/3c"):
+> seed rel-spread fell 25% -> 12.2% and final-HV mean 0.075 -> 0.059. pop 60 /
+> gen 40 is retained; the HV bounds above still bracket the new front.
 
 **Constraint activity (the open 2c question, answered).** Each Pareto design's
 g-vector is classified binding / slack / violated with a per-constraint
@@ -703,3 +709,205 @@ profile is the sound route.
 diffing tag sets — OCC re-tags modified entities, which silently corrupted an
 earlier audit (it reported a 1410 mm "blend radius" and a 46x-too-large face
 area). Query post-fillet entities fresh instead.
+
+## Phase 4a slice 3b/3c: measured root Kt, applied to BOTH stress components
+
+`kt_root = 2.5` is gone. The beam now composes the root stress as
+
+```
+sigma_root = Kt_axial * (N/A) + Kt_bending * sigma_bend
+```
+
+with both factors **measured**, looked up at each design's own root ratio
+`r/t`. The tables ship in `src/propopt/kt_root.py`; the instrument that
+produced them is `src/propopt/hf/kt2d.py` (needs gmsh + CalculiX, never
+imported by the optimizer loop).
+
+### The measured curves
+
+2-D plane strain, CPE6 quadratic triangles, unit depth. Wall of thickness `t`
+on a plate, circular fillet radius `r` (i.e. the stepped-flat-bar geometry).
+`bending` = pure moment (zero net force, zero shear); `axial` = uniform
+tension. Kt = max in-plane principal stress on the fillet arc / sigma_nom read
+from the wall itself. `sigma_nom` reproduced the elementary `6M/t^2` and `F/t`
+to **0.00% on every row**.
+
+| r/t | Kt bending | Kt axial |
+|---|---|---|
+| 0.020 | 3.6202 | 5.3453 |
+| 0.030 | 3.0740 | 4.5089 |
+| 0.040 | 2.7439 | 3.9906 |
+| **0.056** | **2.4135** | **3.4698** |
+| 0.075 | 2.1692 | 3.0867 |
+| 0.100 | 1.9562 | 2.7493 |
+| 0.150 | 1.7186 | 2.3384 |
+| 0.200 | 1.5769 | 2.1016 |
+| 0.300 | 1.4170 | 1.8122 |
+| 0.400 | 1.3302 | 1.6427 |
+| 0.500 | 1.2742 | 1.5290 |
+
+### Validation basis
+
+* **Kirsch anchor** — the same extraction, mesh strategy and consistent-load
+  path run on a circular hole in a wide plate (exact Kt = 3.000) converges
+  **monotonically from below**: -3.02% / -1.27% / -1.03% / -0.39% / **-0.19%**
+  / -0.03% / +0.03% at `elem_across` = 4 / 6 / 8 / 12 / **16** / 24 / 32, with
+  the element count growing throughout (23.4k -> 27.5k). The curves above are
+  measured at `elem_across = 16`.
+* **Plate ratio saturated** — D/d = 4 / 6 / 8 / 12 give Kt within +/-0.05% of
+  one another. D/d = 8 is used.
+* **Consistent nodal loads** — 3-point Gauss over the quadratic edge (weights
+  L/6, 2L/3, L/6). Tributary-length weighting is wrong for quadratic elements
+  and fails a uniform-tension patch test by tens of percent; that bug, not mesh
+  resolution, was what produced the earlier Kt = 0.71 reading.
+* **r/t = 0.01 is EXCLUDED** — it did not converge (Kt oscillated 4.08-4.78
+  across the ladder while the element count barely grew). The table starts at
+  0.020.
+
+### How it is applied
+
+The fillet radius is a **manufacturing intent, not a genome variable**:
+`RunConfig.root_fillet_radius_m`, default **0.20 mm**. The optimizer cannot
+trade it — it must not be able to buy safety factor by wishing for a bigger
+blend. Two independent reasons for 0.20 mm: half a 0.40 mm extrusion width is
+the smallest blend an FDM tool path can lay, and it is exactly the slice-3a
+constructibility bound `min(local thickness)/2 = te/2` for the shipped 0.40 mm
+trailing edge, so the fillet is provably buildable on the real solid.
+
+`t` is the design's **computed** root thickness (max of the root section's own
+thickness distribution, read from `geometry.section_thickness` — the same seam
+the loft and the hub-fillet bound use). Nothing is pinned to one design: across
+the 7-30 mm chord bounds the root lands at r/t = 0.056-0.238, always strictly
+inside the table.
+
+**What `te_thickness_m` moves, honestly:** it sets the constructibility bound
+exactly (`r_max = te/2`, reported per design as
+`BeamAnalysis.root_r_max_geom_m`). It does **not** move `t`, and therefore does
+not move Kt, anywhere in the admissible range — the TE wedge is a smoothstep
+that is C1-flat at the max-thickness station, so it only overtakes the section
+maximum at te/c ~ 0.07, and `geometry` already refuses te/c >= 0.06 as "a
+wedge, not an aerofoil". The crossover is unreachable by construction. That is
+a desirable property: choosing a printable trailing edge does not silently
+change the root stress concentration.
+
+**Interpolation** is piecewise linear in `log(Kt - 1)` vs `log(r/t)`: it passes
+through every measured point exactly, reduces between points to a local power
+law (the form the data follows), and is monotone. The global power-law fits
+(`bending 1 + 0.1796 (r/t)^-0.7051`, `axial 1 + 0.3683 (r/t)^-0.6512`) carry
+5.9% / 6.8% maximum error and are **deliberately not in the stress path**.
+
+**Out of range RAISES, it does not clamp.** Below 0.020 is exactly where the
+model failed to converge; above 0.500 the two face fillets collide (`r > t/2`
+is not a filleted wall). Both ends are validity limits, not sampling limits, so
+a clamped value would be a number that was never measured.
+
+### What was wrong before
+
+`kt_root = 2.5` multiplied **only** `sigma_bend`; the centrifugal `N/A` was
+left bare. Measured at the shipped root ratio r/t = 0.056:
+
+| term | old factor | measured | verdict |
+|---|---|---|---|
+| bending | 2.5 | **2.41** | placeholder was 4% conservative — a good guess |
+| axial | **1.0** | **3.47** | the real gap: centrifugal tension unamplified |
+
+The bending placeholder was fine. The unamplified axial term was not: at the
+root of a fast-spinning blade the centrifugal stress is a large share of the
+total, and it was carrying no junction concentration at all.
+
+### Impact (decision mode, 5 seeds, pop 60 x gen 40)
+
+The before-front is regenerated from the current config with the old model
+patched in, so the **only** difference between the two fronts is the Kt
+composition. (`runs/decision/front.json` predates the 7 mm chord floor and
+cannot serve as a baseline.)
+
+**Same 229 designs, two stress models** — root r/t 0.0556-0.0923, Kt_axial
+2.84-3.48 (was 1.0), Kt_bending 2.01-2.42 (was 2.5):
+
+| | min | median | mean | max |
+|---|---|---|---|---|
+| SF before | 1.004 | 2.743 | 3.360 | 8.247 |
+| SF after | 0.939 | 2.317 | 2.719 | 6.161 |
+| ratio | 0.693 | 0.808 | 0.844 | 1.128 |
+
+Median SF falls **19.2%**. Only **2 of 229** designs (0.9%) drop below SF = 1 —
+the correction is a broad ~20% haircut, not a cliff. The `ratio > 1` tail is
+real: thin-rooted designs sit at higher r/t where the measured bending factor
+(2.01) is *below* the old 2.5 placeholder by more than the new axial term costs
+them.
+
+**Re-optimized front vs old front** (229 -> 200 designs):
+
+| objective | OLD min | OLD max | NEW min | NEW max | median shift |
+|---|---|---|---|---|---|
+| thrust_N | 2.0008 | 10.2321 | 2.0011 | 10.2973 | -4.5% |
+| figure_of_merit | 0.3675 | 0.6546 | 0.3494 | 0.6502 | +2.4% |
+| mass_kg | 0.0038 | 0.0204 | 0.0040 | 0.0195 | -8.5% |
+| safety_factor | 1.0043 | 8.2475 | 1.0000 | 6.3034 | -22.5% |
+
+**What the optimizer trades to recover feasibility: rpm, not material.** Median
+rpm drops 7.7% (6345 -> 5856) and throttle 5.6%, while median mass *falls* 8.5%
+and chord barely moves (-3.3%). Centrifugal stress scales with omega^2, so
+under an amplified axial term the cheapest way to buy back safety factor is to
+spin slower — and the lost thrust is partly recovered with 7.4% more twist,
+which is why figure of merit *rises* 2.4%. The thrust ceiling is untouched
+(10.23 -> 10.30 N): the max-thrust corner was never SF-limited.
+
+**HV bounds still bracket the new front** — no rescaling needed:
+
+| objective | ideal | nadir | new best | new worst | headroom to ideal | max loss |
+|---|---|---|---|---|---|---|
+| thrust_N | 15.0 | 1.5 | 10.2973 | 2.0011 | 34.8% | 0.963 |
+| figure_of_merit | 1.0 | 0.0 | 0.6502 | 0.3494 | 35.0% | 0.651 |
+| mass_kg | 0.0 | 0.035 | 0.0040 | 0.0195 | 11.4% | 0.558 |
+| safety_factor | 10.0 | 0.8 | 6.3034 | 1.0000 | 40.2% | 0.978 |
+
+Every normalized loss lies strictly inside [0,1); **zero** points are pinned at
+the nadir. The SF nadir of 0.8 still sits just below the constraint floor as
+designed (worst feasible SF = 1.0000, loss 0.978 — tight but not clipped). The
+SF ideal of 10 is now 40.2% away from the best achieved design, versus 19.0%
+before, so the SF axis carries more unused headroom than the other three; the
+bounds remain valid (they are normalization constants, not targets) but the SF
+dimension is now the least-exercised. HV falls 0.0919 -> 0.0654, which is the
+correct direction: the same search over a genuinely smaller feasible region.
+
+### Convergence re-check under the corrected physics
+
+`n_var` is unchanged but the feasible region shrank, so pop 60 / gen 40 was
+re-measured rather than assumed (5 seeds):
+
+| seed | HV gen 1 | gen 20 | gen 30 | gen 40 | monotonic | creep, last 10 gen |
+|---|---|---|---|---|---|---|
+| 0 | 0.01570 | 0.05385 | 0.05935 | 0.06234 | yes | 5.0% |
+| 1 | 0.02010 | 0.05047 | 0.05717 | 0.05957 | yes | 4.2% |
+| 2 | 0.01710 | 0.05400 | 0.05972 | 0.06325 | yes | 5.9% |
+| 3 | 0.01274 | 0.04664 | 0.05190 | 0.05597 | yes | 7.8% |
+| 4 | 0.01859 | 0.05081 | 0.05358 | 0.05630 | yes | 5.1% |
+
+**Final-HV seed spread: 12.2%, down from 25.1%.** The seeds now agree with each
+other roughly twice as well — amplifying the axial term sharpened the feasible
+region, so there is less for a seed to get lucky about. (`SEED_SPREAD_LIMIT` in
+`tests/test_convergence.py` tightened 0.35 -> 0.25 accordingly.)
+
+Each *individual* run is, however, slightly further from its own asymptote than
+before. A gen-80 probe (seeds 0-1) puts gen 40 at **88.5%** of the gen-80
+hypervolume, with creep 24.3% / 11.7% / 4.6% / 5.2% / 2.5% / 2.9% / 1.9% per
+10 generations at gen 20 / 30 / 40 / 50 / 60 / 70 / 80. **pop 60 x gen 40 is
+retained** as the exploration-grade setting: it is still the near-converged
+point that fits the <=5 min 5-seed budget, and its cross-seed agreement
+improved. Runs wanting the last ~10% of hypervolume should raise `n_gen` toward
+70-80; that is a config decision and was not made here, since changing it would
+invalidate the fronts reported above.
+
+### Outstanding
+
+* **3-D confirmation.** These are 2-D plane-strain numbers. Plane strain holds
+  at MID-CHORD, where the blade root is locally a long prismatic wall; near the
+  leading and trailing edges the section is short chordwise and the true state
+  approaches plane STRESS, which is not covered. Confirming the curve on the
+  real filleted 3-D blade is the next structural step.
+* **Variable-radius fillet.** A constant radius is bounded by `te/2` at the
+  trailing edge, which is where it runs out first. A variable-radius blend
+  would allow a much larger (and much less concentrating) fillet over the
+  mid-chord region where the stress actually peaks.
