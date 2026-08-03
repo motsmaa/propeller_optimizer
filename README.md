@@ -209,6 +209,45 @@ out from a Pareto front via `export.export_selected_stl`. Re-export them. The
 numbers those runs reported remain valid; only the printable orientation was
 wrong.
 
+### Phase 4b baseline (good5): first physically-coherent CFD result
+
+5R box, 1,184,958 cells, no layers, MRF (rotor cellZone r=1.3R, +/-0.4R),
+kOmegaSST wall functions, potentialFoam init, 2500 iterations (1.96 h, 8 cores,
+2731 MB). Driver: `run_hover_variant.py` (assertion-hardened: reconstructs
+before sampling and RAISES on any zero/missing result, after an earlier version
+silently reported zeros for a parallel run).
+
+| | CT | CP |
+|---|---|---|
+| CFD good5 | 0.0530 | 0.0314 |
+| measured UIUC @ 4590 rpm | 0.1200 | 0.0484 |
+| BEMT | 0.0964 | 0.0381 |
+
+alpha = +22.30 / +13.93 / +5.51 deg at root/mid/tip, equal to local twist to
+0.0000 deg. Forces stationary (thrust p-p 1.02%, torque 0.49% over the last 200
+iterations); residuals U ~9.5e-4, p 1.7e-6; mass conserved (net far-field flux
+8.2e-6 m^3/s).
+
+**What is right:** the inflow is textbook - smooth near-uniform acceleration
+from -2.2 to -5.5 m/s over +2R to +0.5R, and a properly loaded annulus peaking
+-10.5 m/s at the tip radius.
+
+**What is not:** CT is -56% against measurement, and THE WAKE DOES NOT
+PROPAGATE. Volume flux (r<=2.5R) peaks at -1.482 m^3/s at -0.5R, collapses to
+-0.965 at -1R and REVERSES to +0.281 at -2R, where every radius is flowing back
+toward the rotor. No contraction, no flux conservation - a recirculating torus,
+not a slipstream.
+
+This matters because it can no longer be blamed on a badly-loaded rotor (the
+earlier nose-down explanation, now falsified): the rotor IS loaded and the
+inflow IS coherent, and the wake still turns around within 1R. The
+induced-velocity ratio is therefore NOT reported - momentum theory's v_i
+presumes a developed contracting slipstream, and quoting it here would repeat
+the phantom-thrust error made earlier in this phase.
+
+Open: whether the confinement is domain size, far-field BC, MRF zone extent, or
+whether a steady rotating-frame model can sustain a hover slipstream at all.
+
 ## Phase 2b (in progress): reduced structural solver
 `solvers/beam.py` replaces the null safety factor with a rotating-cantilever
 1-D beam FE on the shared stations (Euler-Bernoulli / Hermite elements,
