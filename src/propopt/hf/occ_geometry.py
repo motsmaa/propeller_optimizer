@@ -108,7 +108,14 @@ def station_rings(design: PropellerDesign,
         xi = (poly[:, 0] - PITCH_AXIS_CHORD_FRAC)[None, :] * c[:, None]
         eta = poly[:, 1][None, :] * c[:, None]
 
-    cos_t, sin_t = np.cos(t)[:, None], np.sin(t)[:, None]
+        # NOTE: rotation sense. The section is rotated by MINUS the twist.
+    # The chord is laid out with the leading edge at xi = -0.25c (i.e. at
+    # NEGATIVE x), so a +twist rotation puts the trailing edge ABOVE the
+    # leading edge relative to the oncoming wind, giving negative
+    # incidence for the only rotation sense that leads with the nose.
+    # Settled empirically from blade surface pressure in a solved field,
+    # not by algebra -- see hf/hover_case.signed_incidence_deg.
+    cos_t, sin_t = np.cos(-t)[:, None], np.sin(-t)[:, None]
     rings = np.empty((len(r), xi.shape[1], 3))
     rings[:, :, 0] = xi * cos_t - eta * sin_t      # tangential (rotor plane)
     rings[:, :, 1] = xi * sin_t + eta * cos_t      # axial

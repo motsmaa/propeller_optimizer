@@ -163,6 +163,52 @@ Phase-2a assumptions and deliberate semantics:
   hub == tip / non-increasing stations); solvers reject contract-valid but
   physically-unsolvable ones (`SolverError`, penalized by the optimizer).
 
+### Placement twist-sign defect (found 2026-08, fixed)
+
+Sections were rotated by **+twist** while the chord is laid out with the
+**leading edge at xi = -0.25c**, i.e. at NEGATIVE x. Those two conventions are
+incompatible: the only rotation sense that leads with the nose then puts the
+blade at NEGATIVE incidence. Every lofted blade was effectively pitched
+nose-down, and no rotation direction made it a working propeller. The fix
+rotates by `-twist`; `station_rings` and `build_blade_solid` remain bitwise
+identical to each other.
+
+**Why nothing caught it for three phases.** No consumer of the geometry could
+see it:
+
+| consumer | why it was blind |
+|---|---|
+| BEMT | reads `twist_rad` directly and uses \|Omega r\|; never touches the 3-D placement |
+| beam / structural | centrifugal magnitude and section bending; both placement-sign-invariant |
+| loft volume / mass | a proper rotation preserves volume; orientation-insensitive |
+| mesh quality, watertightness | topological, not orientational |
+
+Only a **3-D placement consumer** could observe it, and the project had none
+until Phase 4b. It was found empirically: sampling blade surface pressure in a
+solved CFD field showed the face the code labelled "suction" carrying the
+HIGHER pressure across r/R 0.2-0.8 (by 99-267 m^2/s^2). Two sign-algebra
+attempts got it wrong in opposite directions before the measurement settled it.
+
+**Guards added** (`tests/test_hf_rotation.py`, enforced in `build_hover_case`):
+`assert_leading_edge_first` (chord vs direction of travel) and
+`assert_positive_incidence` (alpha = +asin(wind . n_suction), measured against
+the suction normal sampled at MATCHED chordwise indices). Each catches a
+different failure; neither alone would have caught this one.
+
+**Blast radius.** Loft volume and mass shift by **0.376%** (UIUC blade
+4.913726e-6 -> 4.895264e-6 m^3) from triangle-chording of the reversed twist.
+That is the same O(dtheta^2) faceting effect already documented above and sits
+well inside its 5% band, so **prior mass, structural and Pareto results stand**.
+Pinned BEMT references, UIUC anchors and the beam SF/f1 pins are unchanged to
+full precision.
+
+**Affected artifacts — every STL exported before this fix is pitched the wrong
+way and is not a valid propeller**, independent of CFD:
+`runs/decision/stl/blade_*.stl`, `runs/exploration/stl/*`, and any STL handed
+out from a Pareto front via `export.export_selected_stl`. Re-export them. The
+numbers those runs reported remain valid; only the printable orientation was
+wrong.
+
 ## Phase 2b (in progress): reduced structural solver
 `solvers/beam.py` replaces the null safety factor with a rotating-cantilever
 1-D beam FE on the shared stations (Euler-Bernoulli / Hermite elements,

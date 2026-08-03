@@ -119,8 +119,15 @@ def test_fillet_volume_must_come_from_the_mesh_not_getmass():
                          extent_factor=ext, thickness_factor=th)
         info = try_fillet(d, hub, r, te_thickness_m=TE)
         dv.append(info["occ_volume_m3_unreliable"] - info["fused_volume_m3"])
-    # a genuine local fillet would give the SAME dV for both plates
-    assert abs(dv[0] - dv[1]) / max(dv) > 0.25, (
+    # A genuine local fillet would give the SAME dV for both plates, so the
+    # spread is the evidence. Normalised by max(|dV|), NOT max(dV): after the
+    # placement twist-sign fix the blade meets the plate at a different angle
+    # and getMass returns NEGATIVE dV for both plates. That is itself further
+    # evidence of unreliability - a CONCAVE fillet adds material at a junction
+    # and cannot remove it - so the assertion must be sign-robust rather than
+    # assume the artifact happens to come out positive.
+    spread = abs(dv[0] - dv[1]) / max(abs(d) for d in dv)
+    assert spread > 0.25, (
         "getMass now agrees across plate sizes - re-check whether the OCC "
         "volume bug is fixed and this guard can be tightened")
 
