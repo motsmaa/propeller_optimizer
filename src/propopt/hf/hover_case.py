@@ -59,6 +59,10 @@ from .openfoam import FoamCase, write_dict
 # Sea-level ISA air, the same properties the BEMT solver uses, so a CT/CP
 # comparison is not confounded by a different atmosphere.
 RHO_AIR = 1.225          # kg/m^3
+_FF_U = {"totalPressure": "pressureInletOutletVelocity; value uniform (0 0 0)",
+         "inletOutlet": "inletOutlet; inletValue uniform (0 0 0); value uniform (0 0 0)"}
+_FF_P = {"totalPressure": "totalPressure; p0 uniform 0; value uniform 0",
+         "inletOutlet": "fixedValue; value uniform 0"}
 NU_AIR = 1.4607e-5       # m^2/s (kinematic)
 
 
@@ -98,6 +102,12 @@ class HoverCaseConfig:
     rho: float = RHO_AIR
     nu: float = NU_AIR
     turbulence_model: str = "kOmegaSST"
+    # Far-field opening type. "totalPressure": constant-total-pressure opening
+    # (p0 = 0) with pressureInletOutletVelocity - the standard hover opening.
+    # "inletOutlet": fixed STATIC pressure with a switching velocity BC. The
+    # two differ in how much entrainment they permit, which is exactly the
+    # suspect when a wake fails to exit.
+    far_field_bc: str = "totalPressure"
     # --- geometry ---
     te_thickness_m: float = 2.0e-4
     n_chord: int = DEFAULT_N_CHORD
@@ -673,19 +683,30 @@ MRF1
     # --- fields -------------------------------------------------------------
     # Quiescent far field. k is small but non-zero (a true zero would make the
     # SST equations degenerate); omega from a length scale of one tip radius.
-    k_inf = 1.0e-4
+    # Free-stream turbulence pair, DERIVED not guessed. Hover has no U_inf, so
+    # the reference velocity is the nominal induced velocity from momentum
+    # theory at the measured thrust, v_i = sqrt(T / 2 rho A) ~ 5 m/s.
+    #   I = 1%, U_ref = 5 m/s  ->  k = 1.5 (I U_ref)^2 = 3.75e-3
+    # The TEXTBOOK epsilon (Cmu^0.75 k^1.5 / L, L = 0.1R) gives nu_t/nu = 29:
+    # a "quiescent" far field carrying 29x laminar eddy viscosity, which is
+    # what diverged the first k-epsilon attempt. epsilon is instead set so the
+    # far-field eddy viscosity is laminar-order, nu_t/nu = 1, which is what
+    # still air actually means:  epsilon = Cmu k^2 / nu.
+    k_inf = 3.75e-3
     omega_inf = 1.0
+    # Cmu^0.75 k^1.5 / L with Cmu=0.09, L = one tip radius
+    eps_inf = 0.09 * k_inf ** 2 / cfg.nu          # -> nu_t/nu = 1
     write_dict(src, "0", "U", """
 dimensions      [0 1 -1 0 0 0 0];
 internalField   uniform (0 0 0);
 boundaryField
 {
     "blade_.*" { type noSlip; }
-    farfield   { type pressureInletOutletVelocity; value uniform (0 0 0); }
+    farfield   { type FFU; }
     cyclic_neg { type cyclic; }
     cyclic_pos { type cyclic; }
 }
-""", cls="volVectorField")
+""".replace("FFU", _FF_U[cfg.far_field_bc]), cls="volVectorField")
 
     write_dict(src, "0", "p", """
 // KINEMATIC pressure (m^2/s^2), NOT pascals: simpleFoam is incompressible.
@@ -694,11 +715,11 @@ internalField   uniform 0;
 boundaryField
 {
     "blade_.*" { type zeroGradient; }
-    farfield   { type totalPressure; p0 uniform 0; value uniform 0; }
+    farfield   { type FFP; }
     cyclic_neg { type cyclic; }
     cyclic_pos { type cyclic; }
 }
-""", cls="volScalarField")
+""".replace("FFP", _FF_P[cfg.far_field_bc]), cls="volScalarField")
 
     write_dict(src, "0", "k", f"""
 dimensions      [0 2 -2 0 0 0 0];
@@ -721,6 +742,19 @@ boundaryField
     farfield   {{ type inletOutlet; inletValue uniform {omega_inf}; value uniform {omega_inf}; }}
     cyclic_neg {{ type cyclic; }}
     cyclic_pos {{ type cyclic; }}
+}}
+""", cls="volScalarField")
+
+    # epsilon is written unconditionally: kEpsilon reads (k, epsilon) and
+    # kOmegaSST reads (k, omega), so an unused field is inert. Writing both
+    # makes turbulence_model a pure config switch with no case-structure change.
+    write_dict(src, "0", "epsilon", f"""
+dimensions      [0 2 -3 0 0 0 0];
+internalField   uniform {eps_inf};
+boundaryField
+{{
+    "blade_.*" {{ type epsilonWallFunction; value uniform {eps_inf}; }}
+    farfield   {{ type inletOutlet; inletValue uniform {eps_inf}; value uniform {eps_inf}; }}
 }}
 """, cls="volScalarField")
 
@@ -806,6 +840,10 @@ divSchemes
     div(phi,U)      bounded Gauss linearUpwind grad(U);
     div(phi,k)      bounded Gauss limitedLinear 1;
     div(phi,omega)  bounded Gauss limitedLinear 1;
+    // epsilon is listed unconditionally so turbulence_model stays a pure
+    // config switch: kEpsilon needs div(phi,epsilon), kOmegaSST needs
+    // div(phi,omega), and an unused entry is inert.
+    div(phi,epsilon) bounded Gauss limitedLinear 1;
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }
 laplacianSchemes { default Gauss linear limited corrected 0.33; }
@@ -834,7 +872,7 @@ solvers
         relTol          0.01;
         smoother        GaussSeidel;
     }
-    "(U|k|omega)"
+    "(U|k|omega|epsilon)"
     {
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -850,11 +888,11 @@ SIMPLE
 {
     nNonOrthogonalCorrectors 1;
     consistent      yes;
-    residualControl { p 1e-5; U 1e-5; "(k|omega)" 1e-5; }
+    residualControl { p 1e-5; U 1e-5; "(k|omega|epsilon)" 1e-5; }
 }
 relaxationFactors
 {
-    equations { U 0.8; ".*" 0.8; }
+    equations { U 0.7; p 0.7; "(k|omega|epsilon)" 0.5; ".*" 0.7; }
 }
 """)
 

@@ -26,6 +26,11 @@ NP = int(sys.argv[4]) if len(sys.argv) > 4 else 8
 MRF_R = float(sys.argv[5]) if len(sys.argv) > 5 else 1.3
 MRF_H = float(sys.argv[6]) if len(sys.argv) > 6 else 0.4
 MRF_OFF = float(sys.argv[7]) if len(sys.argv) > 7 else 0.0
+FFBC = sys.argv[8] if len(sys.argv) > 8 else "totalPressure"
+SL = (int(sys.argv[9]), int(sys.argv[10])) if len(sys.argv) > 10 else (4, 5)
+RRL = int(sys.argv[11]) if len(sys.argv) > 11 else 2
+NITER = int(sys.argv[12]) if len(sys.argv) > 12 else 2500
+TURB = sys.argv[13] if len(sys.argv) > 13 else "kOmegaSST"
 RPM, RHO, D, R = 4590.0, 1.225, 0.254, 0.127
 SRC = Path("runs/uiuc_" + NAME)
 OUT = open("runs/uiuc_" + NAME + ".txt", "w")
@@ -40,9 +45,11 @@ def say(s=""):
 geom = load_geometry(Path("data/uiuc/apcsf_10x4.7_geom.txt"))
 design = design_from_geometry(geom, D, 2, RPM, n_stations=20)
 base = dict(rpm=RPM, periodic=False, background_cells_per_span=28,
-            surface_level=(4, 5), rotor_region_level=2, far_field_radii=FAR,
-            n_iterations=2500, n_proc=NP,
-            mrf_zone_radii=MRF_R, mrf_zone_half_height_radii=MRF_H)
+            surface_level=SL, rotor_region_level=RRL, far_field_radii=FAR,
+            n_iterations=NITER, n_proc=NP,
+            turbulence_model=TURB,
+            mrf_zone_radii=MRF_R, mrf_zone_half_height_radii=MRF_H,
+            far_field_bc=FFBC)
 if LAY:
     base.update(n_layers=12, layer_expansion=1.2, first_layer_m=2.6e-5,
                 nut_wall_function="nutUSpaldingWallFunction")
@@ -51,7 +58,7 @@ else:
 cfg = HoverCaseConfig(**base)
 say("VARIANT " + NAME + ": far=" + str(FAR) + "R layers=" + str(cfg.n_layers)
     + " mrf_r=" + str(MRF_R) + "R mrf_h=" + str(MRF_H) + "R off="
-    + str(MRF_OFF) + "R np=" + str(NP))
+    + str(MRF_OFF) + "R sl=" + str(SL) + " ffbc=" + FFBC + " np=" + str(NP))
 
 if SRC.exists():
     shutil.rmtree(SRC)
@@ -101,7 +108,7 @@ case.sync_out()
 
 res = parse_residuals(r.log_text)
 steps = parse_time_steps(r.log_text)
-say("iters %d/2500 converged=%s" % (len(steps), len(steps) < 2500))
+say("iters %d/%d converged=%s" % (len(steps), NITER, len(steps) < NITER))
 for f, v in res.items():
     say("  %-7s %.3e -> %.3e (min %.3e)" % (f, v[0], v[-1], v.min()))
 
@@ -219,7 +226,7 @@ json.dump({"name": NAME, "far": FAR, "layers": cfg.n_layers, "mrf_r": MRF_R,
            "T": T, "Q": Q, "ct": ct, "cp": cp, "ppT": ppT, "ppQ": ppQ,
            "vi": vi, "vi_ideal": vi_ideal, "ratio": ratio,
            "flux_sumMag": flux_mag, "recirc_mean_Uy": float(down[:, 3].mean()),
-           "iters": len(steps), "mesh_wall": mesh_wall, "mesh_rss": mesh_rss,
+           "iters": len(steps), "n_iter_requested": NITER, "mesh_wall": mesh_wall, "mesh_rss": mesh_rss,
            "solve_wall": r.wall_s, "solve_rss": r.peak_rss_mb},
           open("runs/summary_" + NAME + ".json", "w"), indent=1)
 OUT.close()

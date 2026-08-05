@@ -248,6 +248,107 @@ the phantom-thrust error made earlier in this phase.
 Open: whether the confinement is domain size, far-field BC, MRF zone extent, or
 whether a steady rotating-frame model can sustain a hover slipstream at all.
 
+## Phase 4b (CLOSED, negative result): steady MRF cannot sustain a hover slipstream
+
+**Outcome: steady frozen-rotor MRF does not produce a coherent hover slipstream
+on any mesh resolvable within a 9 GB / 8-core budget.** Every non-transient
+explanation was tested and eliminated. Transient sliding-mesh/AMI is required.
+This is a negative result, not a failure: the eliminations are the deliverable.
+
+### Independent finding: blade placement twist sign (real bug, fixed)
+
+Sections were rotated by +twist against a leading-edge-at--x convention, so
+every lofted blade was pitched nose-down and no rotation sense made it a working
+propeller. Fixed (rotate by -twist); guards added
+(`tests/test_hf_rotation.py`). **Exported STLs before that fix are invalid
+propellers.** Loft volume/mass shifted 0.376%, inside the documented faceting
+band, so prior mass/structural/Pareto results stand. See the Phase-2a section.
+
+### Eliminated as causes of the wake reversal
+
+| variable | range tested | effect |
+|---|---|---|
+| domain size | 5R, 10R, 15R, 20R | none (CT within noise) |
+| far-field BC | totalPressure, inletOutlet | none |
+| MRF zone extent | +/-0.4R, -2.5R, -4R | artifact only, non-monotonic |
+| wall treatment | y+ 11.1 - 83.4 (mean) | none |
+| blade surface resolution | 0.344 -> 0.172 mm | none (CT -8%, below noise) |
+| iteration count | 2500 -> 10000 | none (residuals plateau ~1e-3) |
+| diagnostics | validated vs shipped tutorial | correct |
+| MRF implementation | Taylor-Couette analytic | 0.24% max error |
+
+### The established finding, stated precisely
+
+**The wake reversal is a numerical-diffusion artifact in the sense that COARSE
+wake meshes SUPPRESS it — it is not a real feature that fine meshes resolve.**
+Flux at -2R (r <= 1.5R) tracks wake cell size and nothing else:
+
+| wake cell | 2.75 mm | 5.5 mm | 11.0 mm |
+|---|---|---|---|
+| flux at -2R | +0.078 .. +0.107 (reverses) | +0.053 | -0.426 .. -0.540 (exits) |
+
+Four runs at 2.75 mm (good5, W23, ISO, LONG, SURF56) all reverse, spanning
+y+ 11-28. Two runs at 11.0 mm both exit, spanning y+ 38-83. y+ ranges OVERLAP
+across the two behaviours, so wall treatment cannot be the controlling variable
+and wake resolution can. The uncomfortable direction: our FINEST meshes show the
+recirculation, so refining further would make it worse, not better.
+
+### The CT deficit - unexplained, and distinct from the BEMT residual
+
+CT sits at **-56% to -60%** against measured (0.1200) across every adequately
+converged variant, unmoved by everything in the table above. It is NOT the
+Phase-1 BEMT residual: BEMT uses the SAME geometry and lands at -20%. The
+CFD-specific two thirds of the gap has no identified cause.
+
+### k-epsilon: UNTESTED BY DEFAULT, not eliminated
+
+Two bounded attempts both diverged (Fy -> -2.0e+65 at iteration 6; 1.0e+93 at
+iteration 8 with a derived free-stream pair at nu_t/nu = 1.00 and relaxation
+reduced to 0.5 on the turbulence equations). **This does NOT show the turbulence
+model is irrelevant** - only that k-epsilon could not be made to run within the
+agreed budget. Unexplored: bounded/limited schemes on epsilon, staged startup,
+alternative near-wall treatment. Do not read this row as a completed test.
+Discretisation schemes and the frozen-rotor assumption itself are likewise
+untested.
+
+### Transient sizing - a COST ESTIMATE, not a commitment
+
+Anchors: 1.19M cells -> 2.7 GB, 2.8 s/iter steady on 8 cores; shipped transient
+propeller tutorial 526k cells, 3073 steps, 1.8 h on 4 ranks. Hover needs ~360
+steps/rev (1 deg/step at 4590 rpm) and 8-10 revs to develop -> ~3000-3600 steps,
+each 3-5x a steady iteration.
+
+| level | cells | RAM/run | wall-clock (8 cores) | fits 9 GB? |
+|---|---|---|---|---|
+| coarse | 1.2M | ~3.5 GB | ~30-40 h | yes |
+| medium | 2.5M | ~7 GB | ~65-85 h | marginal |
+| fine | 5M | ~14 GB | ~130-170 h | **no** |
+
+~9 runs (setup + 3 mesh levels + 2 timestep + retries) = 400-600 h serial
+locally: does not fit. Needs >=32 GB/node and 32-64 cores, ~2500-4000
+core-hours. **Not provisioned, not committed.**
+
+### STANDING RULE: an unexercised config field is an unvalidated config field
+
+k-epsilon failed on THREE missing dictionary entries (`epsilon` field writer,
+`div(phi,epsilon)`, `fvSolution` solver entry) that surfaced only on first use,
+after two diverged 2-hour runs. A case-writer smoke test - build + mesh + 2
+iterations on a tiny mesh - finds this class in seconds. **Before any large
+compute commitment, exercise every config field once.** `runs/audit.py` is that
+harness.
+
+Pre-flight audit result, 19 configurations, ~20 minutes, **16 passed / 3 failed**:
+
+| field | result |
+|---|---|
+| `turbulence_model=SpalartAllmaras` | **FAIL** - missing `0/nuTilda` field (same class as the epsilon gaps) |
+| `n_layers=3` (relative sizing) | **FAIL** - topoSet point-count mismatch on a layered mesh; pipeline ordering bug |
+| `periodic=True` (180 sector) | **FAIL** - cyclic face-area mismatch 66.7%; reproduces the known axis degeneracy |
+| kOmega, kEpsilon, realizableKE, inletOutlet, nutUSpalding, core_radii, core_cell_frac, stl_size_m, n_chord, te_thickness_m, write_interval, rho, nu, mrf_zone_radii, mrf_zone_half_height_radii | pass |
+
+Note `kEpsilon` now PASSES the smoke test - the dictionary gaps are fixed; it is
+the SOLVE that diverges. Those are different failures and should not be conflated.
+
 ## Phase 2b (in progress): reduced structural solver
 `solvers/beam.py` replaces the null safety factor with a rotating-cantilever
 1-D beam FE on the shared stations (Euler-Bernoulli / Hermite elements,
