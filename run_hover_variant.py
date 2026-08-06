@@ -94,7 +94,7 @@ mesh_wall = sum(s.wall_s for s in stages)
 mesh_rss = max((s.peak_rss_mb or 0) for s in stages)
 say("MESH wall %.1fs peak RSS %.1f MB" % (mesh_wall, mesh_rss))
 
-rts = run_foam("topoSet", case, ("-constant",), timeout=3600)
+rts = run_foam("topoSet", case, (), timeout=3600)
 zl = [l.strip() for l in rts.log_text.splitlines() if "now size" in l]
 say("  MRF zone: " + (zl[-1] if zl else "NO CELLS SELECTED"))
 if not zl or zl[-1].endswith(" 0"):

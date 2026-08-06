@@ -244,6 +244,19 @@ def _blockmesh(L: float, n: int, periodic: bool,
 
     Two blocks, split at x = 0, because the cyclic pair is the two halves of the
     z = 0 plane and blockMesh cannot split one block face into two patches."""
+    if periodic:
+        raise SolverError(
+            "periodic=True is REFUSED: the 180-degree sector is geometrically "
+            "degenerate. Both halves of the periodic pair lie in the SAME plane "
+            "(z = 0) and meet ON the rotation axis, where cell size collapses. "
+            "snappyHexMesh perturbs points there and the cyclic faces no longer "
+            "match: measured 0.43% area mismatch at the default tolerance, "
+            "growing to 2.95% when the tolerance was relaxed, and 66.7% on a "
+            "coarse mesh. Raising matchTolerance masks a real geometric "
+            "inconsistency rather than fixing it. Use periodic=False (full "
+            "360-degree domain with all blades); at fixed core resolution it "
+            "costs only ~2% more cells because the background mesh is graded.")
+
     if not periodic:
         # Full 360-degree box: no periodic pair at all, so no axis degeneracy.
         vs = [(x, y, z) for z in (-L, L) for y in (-L, L) for x in (-L, L)]
@@ -758,6 +771,21 @@ boundaryField
 }}
 """, cls="volScalarField")
 
+    # nuTilda is written unconditionally for the same reason as epsilon:
+    # SpalartAllmaras reads it, the two-equation models ignore it, so an unused
+    # field is inert and turbulence_model stays a pure config switch. Far-field
+    # value 3*nu is the conventional SA free-stream for an external flow.
+    write_dict(src, "0", "nuTilda", f"""
+dimensions      [0 2 -1 0 0 0 0];
+internalField   uniform {3.0 * cfg.nu:.6e};
+boundaryField
+{{
+    "blade_.*" {{ type fixedValue; value uniform 0; }}
+    farfield   {{ type inletOutlet; inletValue uniform {3.0 * cfg.nu:.6e};
+                 value uniform {3.0 * cfg.nu:.6e}; }}
+}}
+""", cls="volScalarField")
+
     write_dict(src, "0", "nut", """
 dimensions      [0 2 -1 0 0 0 0];
 internalField   uniform 0;
@@ -844,6 +872,7 @@ divSchemes
     // config switch: kEpsilon needs div(phi,epsilon), kOmegaSST needs
     // div(phi,omega), and an unused entry is inert.
     div(phi,epsilon) bounded Gauss limitedLinear 1;
+    div(phi,nuTilda) bounded Gauss limitedLinear 1;
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }
 laplacianSchemes { default Gauss linear limited corrected 0.33; }
@@ -872,7 +901,7 @@ solvers
         relTol          0.01;
         smoother        GaussSeidel;
     }
-    "(U|k|omega|epsilon)"
+    "(U|k|omega|epsilon|nuTilda)"
     {
         solver          smoothSolver;
         smoother        symGaussSeidel;
@@ -888,11 +917,11 @@ SIMPLE
 {
     nNonOrthogonalCorrectors 1;
     consistent      yes;
-    residualControl { p 1e-5; U 1e-5; "(k|omega|epsilon)" 1e-5; }
+    residualControl { p 1e-5; U 1e-5; "(k|omega|epsilon|nuTilda)" 1e-5; }
 }
 relaxationFactors
 {
-    equations { U 0.7; p 0.7; "(k|omega|epsilon)" 0.5; ".*" 0.7; }
+    equations { U 0.7; p 0.7; "(k|omega|epsilon|nuTilda)" 0.5; ".*" 0.7; }
 }
 """)
 

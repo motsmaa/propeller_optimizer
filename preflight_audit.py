@@ -36,11 +36,16 @@ CASES = [
     ("mrf_zone_radii=1.8",  dict(mrf_zone_radii=1.8)),
     ("mrf_half_height=0.9", dict(mrf_zone_half_height_radii=0.9)),
     ("n_layers=3(rel)",     dict(n_layers=3)),
-    ("periodic=True(180)",  dict(periodic=True)),
+    # EXPECTED REFUSAL: the 180-degree sector is geometrically degenerate
+    # (coplanar cyclic pair meeting on the rotation axis). The guard must
+    # raise; silently producing a bad mesh is the failure mode being tested.
+    ("periodic=True(180)",  dict(periodic=True), "refuse"),
 ]
 
 results = []
-for name, over in CASES:
+for entry in CASES:
+    name, over = entry[0], entry[1]
+    expect_refusal = len(entry) > 2 and entry[2] == "refuse"
     src = Path("runs/audit_case")
     if src.exists(): shutil.rmtree(src)
     stage = "config"
@@ -52,11 +57,11 @@ for name, over in CASES:
         case.sync_in()
         for app, args, npx in (("blockMesh", (), None),
                                ("snappyHexMesh", ("-overwrite",), None),
-                               ("topoSet", ("-constant",), None),
+                               ("topoSet", (), None),
                                ("simpleFoam", (), None)):
             stage = app
             run_foam(app, case, args, n_proc=npx, timeout=1800, measure_rss=False)
-        results.append((name, "OK", ""))
+        results.append((name, "FAIL(not refused)" if expect_refusal else "OK", ""))
     except Exception as exc:
         msg = str(exc).replace("\n", " ")
         for key in ("not found in dictionary", "FOAM FATAL", "cannot find",
@@ -66,11 +71,13 @@ for name, over in CASES:
                 msg = msg[i:i+110]; break
         else:
             msg = msg[:110]
-        results.append((name, "FAIL@" + stage, msg))
+        ok = expect_refusal and stage == "build_hover_case" and "REFUSED" in str(exc)
+        results.append((name, "OK(refused)" if ok else "FAIL@" + stage,
+                        "" if ok else msg))
     print(f"{results[-1][0]:32s} {results[-1][1]:22s} {results[-1][2]}", flush=True)
 
 print("\n=== SUMMARY ===")
-bad = [r for r in results if r[1] != "OK"]
+bad = [r for r in results if not r[1].startswith("OK")]
 print(f"{len(results)-len(bad)}/{len(results)} passed")
 for n, s, m in bad:
     print(f"  {n:32s} {s:22s} {m}")

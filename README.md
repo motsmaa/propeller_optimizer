@@ -337,13 +337,13 @@ iterations on a tiny mesh - finds this class in seconds. **Before any large
 compute commitment, exercise every config field once.** `runs/audit.py` is that
 harness.
 
-Pre-flight audit result, 19 configurations, ~20 minutes, **16 passed / 3 failed**:
+Pre-flight audit, 19 configurations, ~20 minutes. First run **16 passed / 3 failed**; all three fixed, now **19/19**. The harness distinguishes a genuine pass from an EXPECTED REFUSAL, so a guard that correctly refuses a degenerate configuration counts as a pass and a guard that silently accepts one counts as a failure:
 
-| field | result |
-|---|---|
-| `turbulence_model=SpalartAllmaras` | **FAIL** - missing `0/nuTilda` field (same class as the epsilon gaps) |
-| `n_layers=3` (relative sizing) | **FAIL** - topoSet point-count mismatch on a layered mesh; pipeline ordering bug |
-| `periodic=True` (180 sector) | **FAIL** - cyclic face-area mismatch 66.7%; reproduces the known axis degeneracy |
+| field | first run | after fix |
+|---|---|---|
+| `turbulence_model=SpalartAllmaras` | FAIL - missing `0/nuTilda` (same class as the epsilon gaps) | **OK** - field + `div(phi,nuTilda)` + solver entry added |
+| `n_layers=3` (relative sizing) | FAIL - topoSet point-count mismatch on a layered mesh | **OK** - `topoSet` no longer pinned to `-constant`; layer addition moves points, so a stale point count was read |
+| `periodic=True` (180 sector) | FAIL - cyclic face-area mismatch 66.7% | **OK (refused)** - now raises `SolverError` up front rather than producing a bad mesh; the geometry is NOT fixed, the degeneracy is documented and the caller is pointed at `periodic=False` |
 | kOmega, kEpsilon, realizableKE, inletOutlet, nutUSpalding, core_radii, core_cell_frac, stl_size_m, n_chord, te_thickness_m, write_interval, rho, nu, mrf_zone_radii, mrf_zone_half_height_radii | pass |
 
 Note `kEpsilon` now PASSES the smoke test - the dictionary gaps are fixed; it is
