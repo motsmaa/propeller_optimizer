@@ -36,6 +36,13 @@ CASES = [
     ("mrf_zone_radii=1.8",  dict(mrf_zone_radii=1.8)),
     ("mrf_half_height=0.9", dict(mrf_zone_half_height_radii=0.9)),
     ("n_layers=3(rel)",     dict(n_layers=3)),
+    # Rung 1. Switches the farfield patch to freestreamVelocity/Pressure and
+    # seeds internalField with the freestream, so it touches U, p and the whole
+    # turbulence free-stream derivation.
+    ("axial_inflow=7.41",   dict(axial_inflow_m_s=7.4138)),
+    # EXPECTED REFUSAL: negative inflow would model a rotor flying backwards
+    # through its own wake; the writer owns the sign, not the caller.
+    ("axial_inflow=-5(bad)", dict(axial_inflow_m_s=-5.0), "refuse"),
     # EXPECTED REFUSAL: the 180-degree sector is geometrically degenerate
     # (coplanar cyclic pair meeting on the rotation axis). The guard must
     # raise; silently producing a bad mesh is the failure mode being tested.
@@ -55,9 +62,14 @@ for entry in CASES:
         stage = "build_hover_case"
         build_hover_case(case, design, cfg)
         case.sync_in()
+        # potentialFoam is in the chain because every real run uses it and it
+        # was never exercised here. It auto-creates Phi with the boundary TYPES
+        # copied from p, so any change to the p far-field BC silently changes
+        # the Laplace problem potentialFoam solves.
         for app, args, npx in (("blockMesh", (), None),
                                ("snappyHexMesh", ("-overwrite",), None),
                                ("topoSet", (), None),
+                               ("potentialFoam", ("-writephi",), None),
                                ("simpleFoam", (), None)):
             stage = app
             run_foam(app, case, args, n_proc=npx, timeout=1800, measure_rss=False)

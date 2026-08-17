@@ -232,7 +232,7 @@ The three-way gap decomposes cleanly and multiplicatively:
 
 | step | ratio | attributable to |
 |---|---|---|
-| CFD / BEMT | x1.88 | the wake recirculation (see rung 0 below) |
+| CFD / BEMT | x1.88 | see rung 0 and **rung 1** below - NOT the recirculation alone |
 | BEMT / measured | x1.20 | the Phase-1 residual (proxy section, transition, 3-D) |
 | product = CFD / measured | x2.26 | |
 
@@ -265,8 +265,16 @@ whether a steady rotating-frame model can sustain a hover slipstream at all.
 
 **Outcome: steady frozen-rotor MRF does not produce a coherent hover slipstream
 on any mesh resolvable within a 9 GB / 8-core budget.** Every non-transient
-explanation was tested and eliminated. Transient sliding-mesh/AMI is required.
-This is a negative result, not a failure: the eliminations are the deliverable.
+explanation of the WAKE behaviour was tested and eliminated. This is a negative
+result, not a failure: the eliminations are the deliverable.
+
+**Superseded, read on:** this section originally continued "Transient
+sliding-mesh/AMI is required." Rung 1 (below) removed that conclusion. A
+forward-flight case on the same pipeline, where the wake convects cleanly and
+the solution converges an order of magnitude harder than hover, is still 41-47%
+low on CT against measurement. A transient hover campaign would not have
+addressed that, so it is NOT the justified next step and the sizing table below
+is retained only as a costing record.
 
 ### Independent finding: blade placement twist sign (real bug, fixed)
 
@@ -306,16 +314,27 @@ across the two behaviours, so wall treatment cannot be the controlling variable
 and wake resolution can. The uncomfortable direction: our FINEST meshes show the
 recirculation, so refining further would make it worse, not better.
 
-### The CT deficit - EXPLAINED by rung 0 (supersedes the "unexplained" reading)
+### The CT deficit - partly explained by rung 0, then RE-OPENED by rung 1
 
 CT sits at **-56% to -60%** against measured (0.1200) across every adequately
 converged variant, unmoved by everything in the table above.
 
 This section previously read "unexplained, and distinct from the BEMT residual",
 and treated the CT deficit and the wake recirculation as two independent
-problems. **Rung 0 falsified that: they are one problem.** The CFD-specific
-x1.88 is the recirculation; only the x1.20 BEMT/measured step remains open, and
-that one is the pre-existing Phase-1 residual on the same geometry.
+problems. Rung 0 falsified the "independent" reading. **Rung 1 then showed the
+opposite over-correction was also wrong**: remove the recirculation entirely (by
+running in forward flight, where the wake convects) and a -41% to -47% CT
+deficit REMAINS. Read the two together:
+
+* rung 0 is a statement of INTERNAL CONSISTENCY - the blade responds correctly
+  to whatever flow it is given, so there is no separate blade-force bug;
+* rung 1 is a statement about ROOT CAUSE - the recirculation is not it, because
+  the deficit survives without it.
+
+The recirculation is best read as a hover-specific AMPLIFIER (-56%) on top of a
+base deficit that is present in forward flight too (-41 to -47%), not as the
+origin. The origin is still open, and the leading suspect is now section
+aerodynamics rather than anything about the wake.
 
 ### Rung 0: reprice CT from the CFD's OWN inflow (post-processing, no solve)
 
@@ -393,8 +412,79 @@ swirl is present with the physically correct sign and makes it slightly worse
 driver.
 
 **Conclusion: the blade is responding correctly to the flow it is given.** No
-separate blade-loading defect is needed to explain CT 0.0530. The CT deficit and
-the wake recirculation are ONE problem, not two.
+separate blade-force bug is needed to explain CT 0.0530 given that inflow.
+
+**What this does NOT establish** (corrected after rung 1, which was run next):
+that the recirculation is the ROOT CAUSE of the CT deficit. This section
+originally closed with "the CT deficit and the wake recirculation are ONE
+problem, not two". That inference was too strong. Self-consistency between the
+blade force and the local flow is compatible with BOTH "the wake is wrong and
+the blade follows it" AND "the blade is weak and the wake follows that". Rung 1
+discriminates, and finds the deficit survives with a clean wake.
+
+### Rung 1: advancing-flow validation against measurement - SECOND PROBLEM FOUND
+
+`run_advancing.py`. Same mesh resolution, same MRF zone, same SST, same
+placement, same potentialFoam init as good5 - ONLY the freestream differs. Two
+points at 5018 rpm taken verbatim from measured rows of
+`apcsf_10x4.7_kt0837_5018.txt` (no interpolation of the reference at all; rpm is
+matched to the file rather than to the hover point, because CT is weakly
+rpm-dependent through Reynolds).
+
+At V > 0 the helical wake CONVECTS - 0.70R per revolution at J=0.349 (blade
+passage 0.35R) - so the frozen-rotor assumption is inside its validity envelope,
+which hover never was. This isolates the pipeline from hover steadiness.
+
+| | J | CT CFD | CT meas | err | CP err | eta err |
+|---|---|---|---|---|---|---|
+| J035 | 0.349 | 0.0416 | 0.0709 | **-41.3%** | -32.3% | -13.3% |
+| J046 | 0.460 | 0.0259 | 0.0486 | **-46.6%** | -35.4% | -17.4% |
+
+**The wake is not the problem here and the solve is not the problem either.**
+The slipstream convects cleanly with no reversal at any downstream station
+(Uy stays negative from +5R through -5R, peaking just aft of the disc). Residuals
+reach Uy 1.3e-4 / p 3.1e-6 and forces are stationary to 0.15% peak-to-peak -
+roughly 7x steadier than good5's hover 1.02%. Net far-field flux ~1e-6 m^3/s.
+This is a well-converged, correct-topology solution that is still 41-47% low.
+
+**Verdict: OUTSIDE the 10% band, so there is a second problem, and it is
+upstream of hover steadiness.** The pre-agreed consequence applies: a transient
+sliding-mesh hover campaign (~2500-4000 core-hours) is NOT the justified next
+step, because it would not touch a deficit that is already present when the wake
+is healthy. Rung 1 cost ~3.5 h locally and saved that commitment.
+
+Supporting signatures, all pointing the same way as hover:
+
+* CT/CP is 1.49 against a measured 1.72 - lift collapses, drag does not. The
+  same fingerprint as the hover case and as the historical backwards-blade bug.
+* The error GROWS with J (-41.3% -> -46.6%), so it is not a constant offset; the
+  CT(J) slope is wrong too.
+* Disc-plane axial excess over momentum-theory v_i is 1.74x (J=0.349) and 1.80x
+  (J=0.460), against 2.35x in hover. INDICATIVE ONLY: that is a single-ray disc
+  average compared against a UNIFORM ideal, and it is inflated by blade blockage
+  and by contraction bringing faster fluid inboard, so it is not a momentum
+  balance and is not claimed as one.
+
+**Leading hypothesis for the second problem: section aerodynamics.** Chord
+Reynolds number here is ~6.8e4 at mid-span and ~2.4e4 at the tip. The CFD is
+FULLY TURBULENT on a 12%-thick NACA 4412 proxy (UIUC publishes planform only),
+while BEMT reaching -17% on the same planform uses XFOIL polars WITH transition
+modelling. A fully-turbulent boundary layer at Re 2-7e4 separates far earlier
+than the real one with its laminar separation bubble, which is exactly a
+lift-collapses-drag-persists error.
+
+This CORRECTS an earlier assessment recorded during the rung-0 review, which
+argued that transition modelling was inside the -20% BEMT band and would not
+move CT materially. That argument assumed the CFD-specific gap was inflow;
+rung 1 removed the inflow explanation, and fully-turbulent RANS at low Re is now
+the prime suspect rather than a dismissed one.
+
+**Cheapest next discriminator (NOT run, not sized as a campaign):** a 2-D
+section study - fully-turbulent RANS vs XFOIL-with-transition on NACA 4412 at
+Re 2e4-7e4 - isolates the section penalty from everything rotor-shaped at
+hours-scale cost and needs no rotor mesh at all. It also separates the two
+sub-suspects, since the proxy-section error and the transition error are
+independent and both live in that same 2-D test.
 
 ### k-epsilon: UNTESTED BY DEFAULT, not eliminated
 
@@ -422,7 +512,9 @@ each 3-5x a steady iteration.
 
 ~9 runs (setup + 3 mesh levels + 2 timestep + retries) = 400-600 h serial
 locally: does not fit. Needs >=32 GB/node and 32-64 cores, ~2500-4000
-core-hours. **Not provisioned, not committed.**
+core-hours. **Not provisioned, not committed — and after rung 1, not justified.**
+Rung 1 cost ~3.5 h locally and established that this spend would have been made
+against the wrong cause.
 
 ### STANDING RULE: an unexercised config field is an unvalidated config field
 
@@ -444,6 +536,18 @@ Pre-flight audit, 19 configurations, ~20 minutes. First run **16 passed / 3 fail
 
 Note `kEpsilon` now PASSES the smoke test - the dictionary gaps are fixed; it is
 the SOLVE that diverges. Those are different failures and should not be conflated.
+
+**Extended to 21 configurations for rung 1** (`preflight_audit.py`), adding
+`axial_inflow_m_s=7.41` and an expected-refusal case for a NEGATIVE inflow (the
+writer owns the freestream sign; a caller must not be able to model a rotor
+flying backwards through its own wake). 21/21.
+
+That run also closed a gap in the HARNESS itself: `potentialFoam` is used by
+every real run but was never in the smoke chain, and it auto-creates `Phi` with
+the boundary TYPES copied from `p` - so any change to the p far-field BC
+silently changes the Laplace problem it solves. It is now in the chain. This is
+the standing rule applied to the rule's own instrument: a stage that every run
+depends on was itself unexercised.
 
 ## Phase 2b (in progress): reduced structural solver
 `solvers/beam.py` replaces the null safety factor with a rotating-cantilever

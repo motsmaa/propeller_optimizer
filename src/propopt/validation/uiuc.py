@@ -63,6 +63,24 @@ def load_static(path: Path) -> np.ndarray:
     return tbl
 
 
+def load_advancing(path: Path) -> np.ndarray:
+    """Return rows of (J, CT, CP, eta) from a UIUC advancing-flow sweep.
+
+    Separate from `load_static` on purpose: these files are 4-column and CT/eta
+    go NEGATIVE past the zero-thrust advance ratio (the propeller windmills), so
+    the all-positive check that guards the static files would reject valid data.
+    CP must stay positive — a propeller absorbing negative shaft power over this
+    J range would mean the columns are not what they claim to be.
+    """
+    tbl = _parse_table(path, 4)
+    j, cp = tbl[:, 0], tbl[:, 2]
+    if not (np.all(np.diff(j) > 0) and j[0] > 0):
+        raise ValueError(f"advancing-flow J must be increasing and positive: {path}")
+    if np.any(cp <= 0):
+        raise ValueError(f"advancing-flow CP must be positive: {path}")
+    return tbl
+
+
 def design_from_geometry(
     geom: UiucGeometry,
     diameter_m: float,

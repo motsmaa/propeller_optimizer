@@ -108,6 +108,17 @@ class HoverCaseConfig:
     # two differ in how much entrainment they permit, which is exactly the
     # suspect when a wake fails to exit.
     far_field_bc: str = "totalPressure"
+    # ADVANCING FLOW. 0.0 (default) = hover, and the hover case is written
+    # byte-for-byte as before. Non-zero switches the single enclosing farfield
+    # patch to freestreamVelocity/freestreamPressure — the standard external-aero
+    # far field, which decides inflow vs outflow face-by-face from the local flux
+    # instead of forcing a guessed inlet/outlet split, so no patch split and no
+    # blockMesh change is needed. The freestream blows in -y because the rotor
+    # advances along +y (its thrust direction), so in the rotor frame the air
+    # arrives from +y. Advance ratio J = V / (n D) is the caller's business.
+    # PURPOSE: at V > 0 the helical wake convects downstream and the frozen-rotor
+    # MRF assumption is inside its validity envelope, which hover is not.
+    axial_inflow_m_s: float = 0.0
     # --- geometry ---
     te_thickness_m: float = 2.0e-4
     n_chord: int = DEFAULT_N_CHORD
@@ -490,8 +501,23 @@ def build_hover_case(case: FoamCase, design: PropellerDesign, cfg: HoverCaseConf
             f"(got {sector} deg for {design.n_blades} blades). The sector is "
             "config-driven; a new blockMesh writer is needed for other angles.")
 
+    if cfg.axial_inflow_m_s < 0.0:
+        raise SolverError(
+            f"axial_inflow_m_s={cfg.axial_inflow_m_s} is REFUSED: it must be "
+            ">= 0. The "
+            "sign is not the caller's to choose: the rotor advances along +y "
+            "(its thrust direction), so the freestream is always -y and the "
+            "writer applies that sign. A negative value here would model a "
+            "rotor flying backwards through its own wake.")
+    if cfg.axial_inflow_m_s != 0.0 and cfg.periodic:
+        raise SolverError(
+            "axial_inflow_m_s with periodic=True is refused: see the 180-degree "
+            "sector degeneracy below. Use periodic=False.")
+
     # HARD GUARD: a backwards rotor still makes thrust in the right direction,
     # so nothing downstream would flag it. Check before building anything.
+    # These are GEOMETRY checks (blade travel vs section orientation) and carry
+    # no inflow term, so they remain valid and load-bearing at V > 0.
     assert_leading_edge_first(design, cfg, section)
     assert_positive_incidence(design, cfg, section)
 
@@ -705,13 +731,31 @@ MRF1
     # what diverged the first k-epsilon attempt. epsilon is instead set so the
     # far-field eddy viscosity is laminar-order, nu_t/nu = 1, which is what
     # still air actually means:  epsilon = Cmu k^2 / nu.
-    k_inf = 3.75e-3
-    omega_inf = 1.0
+    # ADVANCING: the reference velocity is the actual freestream, not a nominal
+    # induced velocity, and the same I = 1% / nu_t/nu = 1 discipline applies.
+    # The hover branch keeps its LITERALS so the hover case stays byte-identical
+    # (1.5*(0.01*5.0)**2 is 0.0037500000000000007, not 3.75e-3, and would change
+    # the written string).
+    v_inf = float(cfg.axial_inflow_m_s)
+    advancing = v_inf != 0.0
+    if advancing:
+        k_inf = 1.5 * (0.01 * abs(v_inf)) ** 2     # I = 1%
+        omega_inf = k_inf / cfg.nu                 # nu_t = k/omega = nu
+    else:
+        k_inf = 3.75e-3
+        omega_inf = 1.0
     # Cmu^0.75 k^1.5 / L with Cmu=0.09, L = one tip radius
     eps_inf = 0.09 * k_inf ** 2 / cfg.nu          # -> nu_t/nu = 1
+    if advancing:
+        u_internal = f"({0.0:.6f} {-v_inf:.6f} {0.0:.6f})"
+        ff_u = f"freestreamVelocity; freestreamValue uniform {u_internal}"
+        ff_p = "freestreamPressure; freestreamValue uniform 0"
+    else:
+        u_internal = "(0 0 0)"
+        ff_u, ff_p = _FF_U[cfg.far_field_bc], _FF_P[cfg.far_field_bc]
     write_dict(src, "0", "U", """
 dimensions      [0 1 -1 0 0 0 0];
-internalField   uniform (0 0 0);
+internalField   uniform UINT;
 boundaryField
 {
     "blade_.*" { type noSlip; }
@@ -719,7 +763,7 @@ boundaryField
     cyclic_neg { type cyclic; }
     cyclic_pos { type cyclic; }
 }
-""".replace("FFU", _FF_U[cfg.far_field_bc]), cls="volVectorField")
+""".replace("FFU", ff_u).replace("UINT", u_internal), cls="volVectorField")
 
     write_dict(src, "0", "p", """
 // KINEMATIC pressure (m^2/s^2), NOT pascals: simpleFoam is incompressible.
@@ -732,7 +776,7 @@ boundaryField
     cyclic_neg { type cyclic; }
     cyclic_pos { type cyclic; }
 }
-""".replace("FFP", _FF_P[cfg.far_field_bc]), cls="volScalarField")
+""".replace("FFP", ff_p), cls="volScalarField")
 
     write_dict(src, "0", "k", f"""
 dimensions      [0 2 -2 0 0 0 0];
