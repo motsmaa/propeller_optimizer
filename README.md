@@ -221,7 +221,20 @@ silently reported zeros for a parallel run).
 |---|---|---|
 | CFD good5 | 0.0530 | 0.0314 |
 | measured UIUC @ 4590 rpm | 0.1200 | 0.0484 |
-| BEMT | 0.0964 | 0.0381 |
+| BEMT | 0.0996 (-17.0%) | 0.0384 (-20.7%) |
+
+The BEMT row previously read 0.0964 / 0.0381; that was **stale by 3.3% on CT**.
+The tracked value is whatever `tests/test_validation_uiuc.py::test_bemt_vs_uiuc_apcsf_10x47_static[tab-re5e4]`
+prints at 4590 rpm, which is 0.0996 / 0.0384. Corrected during rung 0, when the
+reprice needed the reference it was being compared against.
+
+The three-way gap decomposes cleanly and multiplicatively:
+
+| step | ratio | attributable to |
+|---|---|---|
+| CFD / BEMT | x1.88 | the wake recirculation (see rung 0 below) |
+| BEMT / measured | x1.20 | the Phase-1 residual (proxy section, transition, 3-D) |
+| product = CFD / measured | x2.26 | |
 
 alpha = +22.30 / +13.93 / +5.51 deg at root/mid/tip, equal to local twist to
 0.0000 deg. Forces stationary (thrust p-p 1.02%, torque 0.49% over the last 200
@@ -293,12 +306,95 @@ across the two behaviours, so wall treatment cannot be the controlling variable
 and wake resolution can. The uncomfortable direction: our FINEST meshes show the
 recirculation, so refining further would make it worse, not better.
 
-### The CT deficit - unexplained, and distinct from the BEMT residual
+### The CT deficit - EXPLAINED by rung 0 (supersedes the "unexplained" reading)
 
 CT sits at **-56% to -60%** against measured (0.1200) across every adequately
-converged variant, unmoved by everything in the table above. It is NOT the
-Phase-1 BEMT residual: BEMT uses the SAME geometry and lands at -20%. The
-CFD-specific two thirds of the gap has no identified cause.
+converged variant, unmoved by everything in the table above.
+
+This section previously read "unexplained, and distinct from the BEMT residual",
+and treated the CT deficit and the wake recirculation as two independent
+problems. **Rung 0 falsified that: they are one problem.** The CFD-specific
+x1.88 is the recirculation; only the x1.20 BEMT/measured step remains open, and
+that one is the pre-existing Phase-1 residual on the same geometry.
+
+### Rung 0: reprice CT from the CFD's OWN inflow (post-processing, no solve)
+
+`rung0_reprice.py`. Extract the through-disc axial velocity from the converged
+field, form phi(r) = atan(v_ax / Omega r) and alpha(r) = beta(r) - phi(r), then
+price alpha through the SAME XFOIL polars and the SAME blade-element integral
+BEMT uses (`bemt.py` lines 158/186, copied not re-derived). Cost ~18 s per case.
+
+**The direct reprice does NOT close as originally framed**: at the disc plane it
+gives CT 0.0251 against the CFD's directly-integrated 0.0530, a factor 0.47.
+alpha is small, so CT is hypersensitive to the sampling plane - 0.0641 at
+y=+0.25R through 0.0251 at y=0 to 0.0002 at y=-0.25R. The bracket contains
+0.0530, but a method with that spread confirms nothing on its own.
+
+**The inversion is the test that works.** By what uniform factor k must the
+measured disc-plane inflow be scaled to reproduce a given CT?
+
+| target | k | implied v_ax at mid-span |
+|---|---|---|
+| **CFD's own CT 0.0530** | **0.86** | 7.2 m/s |
+| BEMT CT 0.0996 | 0.61 | 5.1 m/s |
+| measured CT 0.1200 | 0.45 | 3.8 m/s |
+
+The CFD's thrust is consistent with its own measured inflow to within 14%.
+BEMT's CT needs a 39% inflow reduction and measurement 55% - neither value
+occurs anywhere in the field, at any plane or radius. k = 0.86 rather than 1.00
+is expected, not residual: sampling at y=0 is sampling IN the blade plane, so it
+includes part of the blade's own bound-vortex downwash, which blade-element
+theory accounts for through the lift itself rather than through the inflow.
+
+**Summary statistic:** BEMT's local inflow is ~1.15x its own momentum-theory
+ideal (5.2-5.9 vs 4.89 m/s at its 2.97 N) - normal for a real rotor. The CFD's
+is **2.35x** its own. That gap is the entire anomaly.
+
+**Recirculation, measured directly** rather than inferred from a single ray
+(36 azimuths x 5 axial planes, azimuths within 20 deg of a blade excluded):
+
+| v_ax [m/s] | y=+0.25R | y=+0.10R | y=0 | y=-0.10R | y=-0.25R |
+|---|---|---|---|---|---|
+| r/R 0.15 | 5.61 | 4.52 | 1.76 | 0.20 | **-1.28** |
+| r/R 0.50 | 6.94 | 7.72 | 8.41 | 9.16 | 9.72 |
+| r/R 1.00 | 7.01 | 8.66 | 10.09 | 11.11 | 11.83 |
+
+Two signatures. The air arrives **already at 70% of its disc-plane speed a
+quarter-radius upstream** - a real hover slipstream accelerates from ~0 far
+upstream to v_i at the disc; this one is pre-accelerated because it is being
+recycled. And the inner disc carries **negative** downstream axial velocity
+(-1.3 to -1.6 m/s at r/R 0.15-0.20): flow returning up through the rotor. That
+is the torus core, measured.
+
+**The alpha(r) collapse.** alpha falls from +8.95 deg at the root monotonically
+through **zero at r/R = 0.639**, reaching -3.9 deg at the tip; 9 of 20 stations
+sit at negative incidence, against BEMT's +2.3 to +9.4 deg everywhere positive.
+
+| r/R | alpha BEMT | alpha CFD | dT/dr BEMT | dT/dr CFD |
+|---|---|---|---|---|
+| 0.51 | 6.48 | 1.47 | 31.0 | 15.4 |
+| 0.68 | 3.78 | -0.52 | 44.5 | 15.9 |
+| 0.85 | 2.58 | -2.02 | 40.6 | **-0.6** |
+| 0.94 | 2.33 | -3.17 | 23.3 | **-13.1** |
+
+Precision point: NACA 4412 has alpha_0L ~ -4 deg, so negative alpha here is LOW
+lift, not REVERSED lift - those stations still net +0.15 N of the 0.75 N total.
+dT/dr turns negative only outboard of r/R ~ 0.82, where Cl ~ 0 and the
+-Cd sin(phi) drag projection takes over. The blade's entire outer working
+section, normally where most thrust is made, is simply unloaded.
+
+**Robustness.** Convergence-independent: LONG (10,000 iters) reproduces good5
+(2,500) at k = 0.867 vs 0.858 and the identical zero crossing r/R = 0.639, ~1%
+apart, well inside the 3.6% force noise floor. Polar-set-independent (Re>=5e4
+0.0251, extended 0.0224). Not blade contamination (all azimuths 0.0164 vs
+excluded 0.0251, same verdict; 28 valid samples per radial bin). Co-rotating
+swirl is present with the physically correct sign and makes it slightly worse
+(0.0193); BEMT neglects swirl entirely, so that is a minor extra term, not a
+driver.
+
+**Conclusion: the blade is responding correctly to the flow it is given.** No
+separate blade-loading defect is needed to explain CT 0.0530. The CT deficit and
+the wake recirculation are ONE problem, not two.
 
 ### k-epsilon: UNTESTED BY DEFAULT, not eliminated
 
