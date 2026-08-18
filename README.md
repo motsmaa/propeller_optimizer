@@ -479,12 +479,115 @@ move CT materially. That argument assumed the CFD-specific gap was inflow;
 rung 1 removed the inflow explanation, and fully-turbulent RANS at low Re is now
 the prime suspect rather than a dismissed one.
 
-**Cheapest next discriminator (NOT run, not sized as a campaign):** a 2-D
-section study - fully-turbulent RANS vs XFOIL-with-transition on NACA 4412 at
-Re 2e4-7e4 - isolates the section penalty from everything rotor-shaped at
-hours-scale cost and needs no rotor mesh at all. It also separates the two
-sub-suspects, since the proxy-section error and the transition error are
-independent and both live in that same 2-D test.
+**Cheapest next discriminator:** a 2-D section study - fully-turbulent RANS vs
+XFOIL-with-transition on NACA 4412 at Re 2e4-7e4 - isolates the section penalty
+from everything rotor-shaped at hours-scale cost and needs no rotor mesh at all.
+It was run next. It REFUTED this hypothesis.
+
+### 2-D section discriminator: transition REFUTED as the cause
+
+`src/propopt/hf/airfoil_case.py`, `run_airfoil_polar.py`, `price_rans_polar.py`.
+2-D cfMesh (`cartesian2DMesh`; snappyHexMesh cannot be used, its octree refines
+isotropically and would split the span direction). Held identical to the rotor
+case: the SAME section polygon the blade is lofted from including its finite TE,
+kOmegaSST, `nutkWallFunction`, the rotor's fvSchemes/fvSolution, rho and nu. ONE
+mesh serves every angle - the airfoil is fixed and the FREESTREAM is rotated,
+using the same freestreamVelocity/freestreamPressure far field added for rung 1,
+so no per-alpha meshing difference can masquerade as an alpha trend. Measured
+y+ 5.9-31, against the rotor's 11-83.
+
+**Sweep range DERIVED, not assumed** (`alpha_range.py`): from the converged
+rotor fields, weighted by load capacity, the union over hover and both advancing
+points and over BOTH the CFD's own inflow and the momentum-consistent inflow at
+measured thrust is alpha -4.1 .. +7.7 deg, Re 1.7e4 .. 8.7e4. Swept -8..+12 deg
+at Re 2e4/4e4/7e4 (extended upward because BEMT's own fixed point visits alpha
+up to 9.4 deg).
+
+**Setup validated at Re 5e5** (larger 0.20 m chord, so Re 5e5 is reached at
+36.5 m/s rather than the 254 m/s the rotor chord would need): Cl tracks XFOIL to
+within 0.011 through the working range, lift slope 0.1098/deg = 2*pi/rad to
+three figures, zero-lift angle -4.01 deg against the textbook NACA 4412 -4.1.
+Cd sits ~2.2x XFOIL, which is the expected fully-turbulent-vs-transitional
+difference and is the quantity under study, not an error.
+
+**THE RESULT HAS THE OPPOSITE SIGN TO THE HYPOTHESIS.** Fully-turbulent RANS
+predicts MORE lift than transitional XFOIL at low Re, not less:
+
+| Re | dCl at alpha 0 | dCl at alpha +4 |
+|---|---|---|
+| 2e4 | **+0.292** | **+0.419** |
+| 4e4 | +0.229 | +0.268 |
+| 7e4 | +0.051 | +0.004 |
+| 5e5 (validation) | -0.011 | -0.007 |
+
+Monotonic in Reynolds number, and physically coherent: at Re 2e4 a laminar
+boundary layer separates without reattaching, which is what XFOIL models and
+what destroys its lift, while a fully-turbulent boundary layer stays attached.
+Fully-turbulent RANS is OPTIMISTIC at low Re.
+
+**Priced through BEMT** at the hover anchor, polar swapped and nothing else
+changed. The XFOIL control is resampled onto the RANS sweep's own (Re, alpha)
+grid, so the two polars are identical in Re levels, alpha grid and interpolation
+policy and only the DATA differ:
+
+| polar | CT | CP |
+|---|---|---|
+| XFOIL, tracked (Re>=5e4) | 0.0996 | 0.0384 |
+| XFOIL, resampled to the RANS grid | 0.0938 | 0.0373 |
+| XFOIL, extended set | 0.0953 | 0.0378 |
+| **RANS, fully turbulent** | **0.0978** | **0.0389** |
+| rotor CFD (3-D MRF) | 0.0530 | 0.0314 |
+| measured | 0.1200 | 0.0484 |
+
+**Every section model - three XFOIL variants and fully-turbulent RANS - prices
+to CT 0.094-0.100. The rotor CFD gives 0.053. The section model is not the
+discriminator.** Swapping transitional XFOIL for fully-turbulent RANS moves CT
+*up* by 4.3%, i.e. the wrong way: adding a transition model to the rotor CFD
+would make its thrust deficit WORSE, not better.
+
+Decomposition of the total -55.8% rotor gap, by share of the log-gap:
+
+| step | ratio | share |
+|---|---|---|
+| transition modelling (RANS vs XFOIL) | 1.043 | **-5.2%** (wrong direction) |
+| section shape + 3-D (BEMT_XFOIL vs measured) | 0.830 | 22.8% |
+| **rotor-level residual (rotorCFD vs BEMT_RANS)** | **0.542** | **75.0%** |
+
+**Mesh sensitivity, and its limits.** The sweep mesh is deliberately at the
+ROTOR's own surface resolution (1.57% of chord vs the rotor's 0.6-1.2%), so the
+Re 5e5 validation - run at 0.13% of chord - does not validate it. Refining to
+0.78% raises Cl by about +0.06 and refining again to 0.38% adds only ~+0.01, so
+Cl is converging, and the sweep mesh UNDER-predicts Cl. That STRENGTHENS the
+conclusion: a better-resolved section makes even more lift, moving further from
+the rotor's 0.053, not toward it. Two honest limits: the surface cell is
+isotropic, so chordwise resolution and y+ move together and a shift cannot be
+attributed to one alone (the same confound class as the rotor's
+`rotor_region_level` test); and the finest level DIVERGED at Re 2e4 under both
+`nutkWallFunction` and `nutUSpaldingWallFunction` (Cl 2.91 and -5.84, negative
+Cd) despite excellent mesh quality, so it is discarded rather than reported as a
+refinement. Where both wall treatments are valid they agree to ~0.02 in Cl, so
+the wall function is not the driver.
+
+**What this does NOT separate.** The NACA 4412 proxy is not the real APC Slow
+Flyer section, and this study cannot test that: it compares two MODELS of the
+same proxy geometry. A separate observation from `alpha_range.py` does bear on
+it - at J=0.460, even the momentum-consistent inflow at the MEASURED thrust puts
+the blade at alpha -4.1 .. -1.3 deg, where the XFOIL 4412 polar returns Cl <= 0
+(its zero-lift angle is -2.4 deg at Re 8e4, degrading to -0.9 deg at Re 2e4
+through low-Re decambering), yet the real propeller measurably produces
+CT=0.0486. A section that cannot make positive lift at the measured operating
+point is not the section on that blade. That is a proxy-SHAPE finding,
+independent of transition, and it is bounded by the BEMT_XFOIL/measured step
+above (-17%) rather than by the 75% rotor-level residual. Resolving it needs
+matched-section polars, which needs the real APC coordinates - not available in
+the UIUC database, which publishes planform only.
+
+**Where this leaves the CT deficit: 75% of it is rotor-level and unexplained.**
+Not the wake (rung 1), not the section model (this study), not domain, BC, MRF
+zone, wall treatment, blade surface resolution or iteration count (the
+elimination table above). What remains untested is 3-D and rotor-specific: the
+absence of a hub/spinner, tip and root treatment, and the frozen-rotor
+assumption itself.
 
 ### k-epsilon: UNTESTED BY DEFAULT, not eliminated
 
