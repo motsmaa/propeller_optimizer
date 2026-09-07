@@ -268,13 +268,14 @@ on any mesh resolvable within a 9 GB / 8-core budget.** Every non-transient
 explanation of the WAKE behaviour was tested and eliminated. This is a negative
 result, not a failure: the eliminations are the deliverable.
 
-**Superseded, read on:** this section originally continued "Transient
-sliding-mesh/AMI is required." Rung 1 (below) removed that conclusion. A
-forward-flight case on the same pipeline, where the wake convects cleanly and
-the solution converges an order of magnitude harder than hover, is still 41-47%
-low on CT against measurement. A transient hover campaign would not have
-addressed that, so it is NOT the justified next step and the sizing table below
-is retained only as a costing record.
+**RESOLVED, and the resolution is at the end of this chapter.** This section
+went through three readings. It originally continued "Transient sliding-mesh/AMI
+is required"; rung 1 removed that on the grounds that a clean-wake forward-flight
+case was still 41-47% low; the closing tests (rung 2 below) showed rung 1 had
+compared the CFD against the WRONG REFERENCE and restored the original reading.
+The settled position, with numbers, is in **"Phase 4b FINAL"** at the end. Read
+the rungs in order if you want the derivation; read the FINAL section if you
+want the answer.
 
 ### Independent finding: blade placement twist sign (real bug, fixed)
 
@@ -314,7 +315,7 @@ across the two behaviours, so wall treatment cannot be the controlling variable
 and wake resolution can. The uncomfortable direction: our FINEST meshes show the
 recirculation, so refining further would make it worse, not better.
 
-### The CT deficit - partly explained by rung 0, then RE-OPENED by rung 1
+### The CT deficit - rung 0, re-opened by rung 1, CLOSED by rung 2
 
 CT sits at **-56% to -60%** against measured (0.1200) across every adequately
 converged variant, unmoved by everything in the table above.
@@ -335,6 +336,15 @@ The recirculation is best read as a hover-specific AMPLIFIER (-56%) on top of a
 base deficit that is present in forward flight too (-41 to -47%), not as the
 origin. The origin is still open, and the leading suspect is now section
 aerodynamics rather than anything about the wake.
+
+**^ THAT PARAGRAPH IS WRONG. Rung 2 refuted it.** The forward-flight "base
+deficit" is not a CFD defect at all: blade-element theory with the SAME section
+proxy is -38% to -43% at the same conditions, so the CFD was never the outlier
+there. Rung 1 compared the CFD to MEASUREMENT, which carries the proxy error;
+the correct reference is blade-element theory with matched section physics.
+Against that reference the CFD is within 6% in forward flight and short by a
+factor 1.9 in hover ONLY. Rung 0's original reading - deficit and recirculation
+are one problem - is restored. See "Phase 4b FINAL".
 
 ### Rung 0: reprice CT from the CFD's OWN inflow (post-processing, no solve)
 
@@ -422,7 +432,7 @@ blade force and the local flow is compatible with BOTH "the wake is wrong and
 the blade follows it" AND "the blade is weak and the wake follows that". Rung 1
 discriminates, and finds the deficit survives with a clean wake.
 
-### Rung 1: advancing-flow validation against measurement - SECOND PROBLEM FOUND
+### Rung 1: advancing-flow validation - the "second problem" was a REFERENCE ERROR
 
 `run_advancing.py`. Same mesh resolution, same MRF zone, same SST, same
 placement, same potentialFoam init as good5 - ONLY the freestream differs. Two
@@ -447,11 +457,17 @@ reach Uy 1.3e-4 / p 3.1e-6 and forces are stationary to 0.15% peak-to-peak -
 roughly 7x steadier than good5's hover 1.02%. Net far-field flux ~1e-6 m^3/s.
 This is a well-converged, correct-topology solution that is still 41-47% low.
 
-**Verdict: OUTSIDE the 10% band, so there is a second problem, and it is
-upstream of hover steadiness.** The pre-agreed consequence applies: a transient
-sliding-mesh hover campaign (~2500-4000 core-hours) is NOT the justified next
-step, because it would not touch a deficit that is already present when the wake
-is healthy. Rung 1 cost ~3.5 h locally and saved that commitment.
+**Verdict at the time: OUTSIDE the 10% band, so there is a second problem
+upstream of hover steadiness, and the transient campaign is not justified.**
+
+**That verdict was WRONG, and the error was the reference, not the data.** The
+CT numbers above are correct and reproducible. What was wrong was comparing them
+to MEASUREMENT. Measurement carries the NACA 4412 proxy error, and blade-element
+theory carries exactly the same error: forward-flight BET with the 4412 proxy
+gives CT 0.0407 at J=0.349 against the CFD's 0.0416 - **agreement to 2.3%** -
+while both sit ~43% below the measured 0.0709. The CFD was never the outlier in
+forward flight. A 10% band around measurement was the wrong test to apply,
+because no method using this section can enter that band. See rung 2.
 
 Supporting signatures, all pointing the same way as hover:
 
@@ -582,12 +598,86 @@ above (-17%) rather than by the 75% rotor-level residual. Resolving it needs
 matched-section polars, which needs the real APC coordinates - not available in
 the UIUC database, which publishes planform only.
 
-**Where this leaves the CT deficit: 75% of it is rotor-level and unexplained.**
-Not the wake (rung 1), not the section model (this study), not domain, BC, MRF
-zone, wall treatment, blade surface resolution or iteration count (the
-elimination table above). What remains untested is 3-D and rotor-specific: the
-absence of a hub/spinner, tip and root treatment, and the frozen-rotor
-assumption itself.
+**Where this leaves the CT deficit: 75% of it is rotor-level.** Not the section
+model (this study), not domain, BC, MRF zone, wall treatment, blade surface
+resolution or iteration count (the elimination table above).
+
+**Rung 2 then identified that 75%: it is HOVER-SPECIFIC and it is the wake.**
+The 0.542 ratio in the table above is the hover rotorCFD/BET_RANS number. Repeat
+it in forward flight, where the wake convects, and it becomes 0.944 - the same
+comparison, the same section physics, no defect. The "rotor-level residual" is
+not a general 3-D penalty; it exists only at V=0. The line above reading "not
+the wake (rung 1)" is therefore wrong, and rung 1's premise is what was wrong.
+
+### Rung 2: the reference was wrong, not the CFD (post-processing only)
+
+Four tests, all on ALREADY-COMPUTED fields, ~30 minutes total, no new solve.
+`momentum_check.py`, `span_load.py`, `span_ladder.py`, `fwd_bemt.py`.
+
+**2.1 Force extraction and momentum leakage: ELIMINATED.** An independent
+control-volume integration over the OUTER boundary,
+`T = -[rho * sum_f phi_f U_y,f + (integral p n dA)_y]`, touches none of the
+blade-force code path:
+
+| case | T from blade traction | T from far-field momentum | ratio |
+|---|---|---|---|
+| good5 (hover) | 1.5804 N | 1.377 N | 0.87 |
+| J=0.349 | 1.4848 N | 1.434 N | 0.97 |
+| J=0.460 | 0.9255 N | 0.871 N | 0.94 |
+
+Including the far-field viscous term (reported: +0.139 / -0.040 / -0.007 N)
+moves good5 to 1.516 N (0.96). Across every sign convention the ratio is
+0.87-0.99; mass conserved to 1e-6 m^3/s. The hypothesis under test required
+1.7x. Two independent integrations agree, so the low thrust is REAL and momentum
+does not leak at the MRF zone interface.
+
+**2.2 The deficit is not uniform in span.** Spanwise loading integrated from the
+blade surface (VTK dump, `rho*p*Sf` per face, cross-checked against `force.dat`
+pressure to 0.00%; pressure is 99.3% of thrust). Hover, CFD/BEMT by station:
+1.05 at r/R 0.225, 0.71 at 0.525, 0.44 at 0.725, 0.26 at 0.925, **0.18 at
+0.975**. The blade matches BEMT inboard and makes almost nothing at the tip.
+
+**2.3 Blade surface resolution: ELIMINATED as the cause of that collapse.** Four
+completed runs differ ONLY in surface refinement, halving the cell each step
+(W23 1.376 mm -> W34 0.688 -> good5 0.344 -> SURF56 0.172; 5.2k -> 126k blade
+faces). Integrated outboard load (>0.60R): 0.6376, 0.7139, 0.6960, 0.6432 -
+**a 12% non-monotonic wobble across an 8x refinement.** The total CT was already
+known to be flat here; what is new is that the SPANWISE split is flat too, so a
+compensating inboard/outboard trade is ruled out as well.
+
+MRF zone axial extent moves it (B_mrf40: outboard +28%, inboard -28%, net
++4.8%), domain size and far-field BC move it <3%. None is the cause. A larger
+RADIAL zone remains untested.
+
+**2.4 THE RESULT: the CFD reproduces blade-element theory in forward flight and
+fails only in hover.** propopt's BEMT is hover-only, so `fwd_bemt.py` adds the
+standard forward-flight extension - same blade-element integral, same polar
+seam, axial momentum balance carrying the freestream. VALIDATED: at V=0 it
+reproduces the tracked hover BEMT to **six significant figures** (dCT -0.000%).
+Both sides then use the CFD's OWN 2-D RANS section polar, so section physics is
+identical and any gap is 3-D/rotor:
+
+| case | measured | BET-RANS | CFD-3D | **CFD / BET-RANS** |
+|---|---|---|---|---|
+| hover | 0.1200 | 0.0978 | 0.0530 | **0.542** |
+| J=0.349 | 0.0709 | 0.0441 | 0.0416 | **0.944** |
+| J=0.460 | 0.0486 | 0.0194 | 0.0260 | **1.342** |
+
+Correcting the RANS polar for the 2-D mesh under-resolution (uniform dCl up to
++0.09) leaves hover at 0.50-0.54 and J=0.349 at 0.81-0.94: the hover-vs-forward
+**contrast is 1.62-1.74x and robust**.
+
+With the 4412 proxy on both sides instead, BET gives CT 0.0407 at J=0.349
+against the CFD's 0.0416 - agreement to **2.3%** - with both ~43% below the
+measured 0.0709.
+
+**Conclusion: there is no forward-flight CFD defect. There never was.** Rung 1
+measured correctly and compared to the wrong reference: measurement carries the
+section-proxy error, and blade-element theory carries the identical error, so a
+"within 10% of measurement" test could not be passed by ANY method using this
+section. Against matched-section blade-element theory the CFD is within 6% at
+J=0.349 and short by a factor 1.9 in hover only - which is exactly where the
+recirculating wake is. Rung 0's original reading is restored.
 
 ### k-epsilon: UNTESTED BY DEFAULT, not eliminated
 
@@ -615,9 +705,17 @@ each 3-5x a steady iteration.
 
 ~9 runs (setup + 3 mesh levels + 2 timestep + retries) = 400-600 h serial
 locally: does not fit. Needs >=32 GB/node and 32-64 cores, ~2500-4000
-core-hours. **Not provisioned, not committed — and after rung 1, not justified.**
-Rung 1 cost ~3.5 h locally and established that this spend would have been made
-against the wrong cause.
+core-hours.
+
+**Status: justified, costed, and DECLINED.** Rung 1 briefly made it unjustified;
+rung 2 restored the justification (the hover-only factor 1.9 is exactly what a
+transient sliding-mesh run would address). It is not being run, for a reason
+that has nothing to do with whether it would work: the core-hours are not
+available, and the spend would buy only ONE of the two known error terms. The
+other - the NACA 4412 proxy standing in for an unpublished APC section - is
+untouched by any amount of solver quality and is the larger term at every
+advance ratio tested. Converging precisely on the wrong aerofoil is not worth
+2500-4000 core-hours.
 
 ### STANDING RULE: an unexercised config field is an unvalidated config field
 
@@ -651,6 +749,69 @@ the boundary TYPES copied from `p` - so any change to the p far-field BC
 silently changes the Laplace problem it solves. It is now in the chain. This is
 the standing rule applied to the rule's own instrument: a stage that every run
 depends on was itself unexercised.
+
+**A THIRD instance, found during rung 2 and left open.** The `forces` function
+object's `binData` sub-dict (spanwise force binning) is SILENTLY IGNORED by this
+OpenFOAM build: it accepted the dictionary without warning and wrote totals
+only, no `force_bin.dat`. Nothing errored. The spanwise loading in rung 2 was
+therefore computed independently, by dumping the blade patch to VTK and
+integrating `rho*p*Sf` per face in Python - cross-checked against `force.dat`'s
+pressure component to 0.00%. The lesson generalises past config FIELDS to
+FUNCTION-OBJECT OPTIONS: an unexercised option is an unvalidated option, and
+this class fails silently rather than loudly.
+
+## Phase 4b FINAL: the deficit decomposes into two terms, one of them unfixable
+
+**The CFD is not broken.** Against blade-element theory with matched section
+physics it is within 6% in forward flight. The hover shortfall is a factor 1.9
+and is confined to hover.
+
+| term | size | cause | fixable? |
+|---|---|---|---|
+| hover-only | **x1.9** | recirculating wake: steady frozen-rotor MRF has no valid solution at V=0, where the helix does not convect and stands as a stack of vortex rings. Tracks wake CELL SIZE and nothing else - coarse meshes suppress it, fine ones reveal it. | yes, by transient sliding-mesh/AMI: **~2500-4000 core-hours, DECLINED** |
+| all conditions, grows with J | -18.5% at hover, -38% at J=0.349, -60% at J=0.460 | NACA 4412 proxy for an unpublished APC Slow Flyer section. Shared with BEMT, so it is NOT a CFD error. Grows with J because alpha falls toward the section's zero-lift angle, where a wrong alpha_0L dominates. | **no** - needs the real APC coordinates; UIUC publishes planform only |
+
+**Why the chapter closes here rather than with a transient campaign.** The
+campaign is justified and costed, and it would buy the smaller of the two terms.
+The larger term is a geometry-input limitation that no solver spend touches. At
+J=0.460 the proxy is already degenerate: even the momentum-consistent inflow at
+MEASURED thrust puts the blade at alpha -4.1..-1.3 deg, where the XFOIL 4412
+returns Cl <= 0, while the real propeller measurably produces CT=0.0486. A
+section that cannot make positive lift at the measured operating point is not
+the section on that blade.
+
+**What Phase 4b delivered.** The pipeline is validated end to end - geometry,
+mesh, MRF (Taylor-Couette to 0.24%), force extraction (two independent
+integrations agreeing to 0.87-0.99), and section modelling (2-D lift slope
+2*pi/rad, alpha_0L -4.01 deg against the textbook -4.1) - and it reproduces
+blade-element theory wherever the underlying model is valid. It found and fixed
+a real blade-placement twist-sign bug that invalidated every STL exported before
+it. It established the validity boundary of steady MRF empirically rather than
+by assertion. What it does not deliver is agreement with measurement, and the
+reason is now known and quantified rather than open.
+
+**If this is ever resumed**, in cost order: (1) obtain real section coordinates -
+a reference propeller with published geometry, or measure the APC blade directly.
+This is the larger term and costs no core-hours; (2) a larger RADIAL MRF zone,
+one ~2 h run, the only zone variation never tested; (3) the transient campaign,
+only after (1), so the wake fix is not spent on the wrong aerofoil.
+
+### FIVE overturned conclusions - the pattern is the lesson
+
+Every one failed the same way: **reasoning from a derived proxy instead of
+integrating the thing itself, or comparing against the wrong reference.**
+
+| claim | overturned by | what was actually wrong |
+|---|---|---|
+| CT deficit and wake are one problem (rung 0) | rung 1 | premature - but it was RIGHT, and rung 1's refutation was the error |
+| transition modelling is the prime suspect (rung 1) | 2-D study | fully-turbulent RANS makes MORE lift than XFOIL at low Re, not less: wrong sign |
+| the flow carries measured-thrust momentum (rung 2 planning) | test 2.1 | uniform-slipstream v_i = f(T) is invalid here; the rigorous control volume disagrees |
+| blade surface under-resolution is the prime suspect (rung 2 planning) | test 2.3 | 8x refinement moves outboard load 12%, non-monotonically |
+| a second problem exists upstream of hover steadiness (rung 1) | test 2.4 | compared CFD to MEASUREMENT; the right reference is BET with matched section physics |
+
+The tests that settled matters were all direct integrations against a
+like-for-like reference. The ones that misled were all ratios of derived
+quantities.
 
 ## Phase 2b (in progress): reduced structural solver
 `solvers/beam.py` replaces the null safety factor with a rotating-cantilever
