@@ -813,6 +813,147 @@ The tests that settled matters were all direct integrations against a
 like-for-like reference. The ones that misled were all ratios of derived
 quantities.
 
+## Phase 5a (CLOSED, negative result): free-form 3-D sweep, uniform box sampler
+
+**Outcome: 39.6% watertight-and-meshable over 240 random in-bounds genomes,
+against a pre-declared ~90% bar. Falling back to a restricted template family.**
+
+**SCOPE OF THIS NEGATIVE - read this before citing it.** It indicts ONE
+parameterisation under ONE sampler: a 5-control-point clamped cubic B-spline
+with control points drawn UNIFORMLY AND INDEPENDENTLY over a cylindrical
+(r, theta, y) box. It does NOT say free-form geometry generation is
+unworkable, and it does not say B-spline spines are unworkable. A
+bounded-turning-angle encoding of the same space - where consecutive control
+points are drawn as bounded increments in direction rather than independently
+in position, so the reachable curvature is bounded by the encoding - is
+UNTESTED and is named in the resumption order below. The code path is kept.
+
+### What worked, and is reused unchanged
+
+* **The sweep generator never failed.** 240/240 draws produced a single
+  positive-volume OCC solid. Zero sweep failures, zero decode failures.
+* **Volume cross-validates independently.** trimesh against the OCC kernel:
+  max 9.25e-4 relative, median 6.3e-5, on shared-vertex (nodes, triangles)
+  arrays with `process=False` - the same convention `test_geometry.py` uses for
+  the triangle loft. NOT via STL: STL is a triangle soup with no shared
+  vertices, so `is_watertight` is False for every closed solid until vertices
+  are merged, and merging is a repair step a cross-validator must not perform.
+  An earlier version of the gate did use STL and reported 0% watertight - a
+  measurement bug, not a geometry result.
+* **The rotation-minimizing frame.** Double reflection (Wang et al. 2008), not
+  Frenet. Verified against Frenet ON THE SAME CURVE: through an inflection
+  Frenet's normal turns >90 deg between adjacent samples, RMF turns <1 deg.
+  Also orthonormal to 1e-12 along a writhing spine, sampling-convergent, and
+  refusing cusps as `SolverError` BEFORE the transport recurrence divides by a
+  zero segment length - a nan there would silently poison every later frame.
+
+### Why it failed: the sampler, not the sweep
+
+| bucket | n | % |
+|---|---|---|
+| pass | 95 | 39.6 |
+| decode | 0 | 0.0 |
+| sweep | 0 | 0.0 |
+| not watertight | 22 | 9.2 |
+| unmeshable | 123 | 51.3 |
+
+All 123 meshing failures are one message: **`PLC Error: A segment and a facet
+intersect`** - tetgen refusing a SELF-INTERSECTING boundary. Mesh size does not
+help (tested at 0.8, 1.5 and 3.0 mm). All 22 winding failures have worst-penalty
+median 8.51, the same cause. **OCC does not check self-intersection**, so it
+happily returns a watertight solid whose boundary passes through itself;
+watertight is not valid.
+
+The geometric penalties predict the failures: worst penalty **1.449 median among
+passes vs 6.705 among failures** (p90 9.0 vs 31.7).
+
+**The sampler essentially never lands in the feasible set.** Over a separate
+4000-draw screen:
+
+| penalty | satisfied |
+|---|---|
+| curvature vs section | **1.91%** |
+| blade clearance | **2.46%** |
+| self-intersection | 16.75% |
+| hub closure, tangent | 51.09% |
+| hub closure, section | 77.74% |
+| **all five** | **0 / 4000** (95% upper bound ~0.075%) |
+
+`curvature_vs_section` = section_radius / min_curvature_radius - 1 has median
+**4.31** and min -0.24: a random 5-point control polygon in a 127 mm envelope
+bends far tighter than a 6-26 mm-chord section can follow. An optimizer here
+would spend essentially its whole budget on penalized candidates.
+
+### Two measurement bugs found and fixed on the way
+
+Both would have produced a confidently wrong number:
+
+1. **Self-intersection excluded a fixed 12 SAMPLES** of arc neighbourhood. At
+   400 samples over ~0.1 m that is 3 mm, compared against a ~38 mm limit, so
+   every tube was flagged as intersecting ITSELF - a spurious 100%. The
+   exclusion must be GEOMETRIC (a multiple of the local section radius),
+   because a tube legitimately occupies a neighbourhood of its own spine; a
+   sample-count exclusion makes the answer depend on sampling density.
+2. **The RMF seed was built from the exact control-polygon tangent while the
+   transport ran on the discrete sampled tangent**, leaving the first section
+   sheared - 1.8e-3 non-orthogonality at sample 0 against ~1e-16 everywhere
+   else. The seed is now re-projected onto the tangent the recurrence uses.
+
+### WITHDRAWN as evidence: the gamma_min usability result
+
+Of the 95 passes, 0 met the Phase-4a usability rule (gamma_min > 0.1 AND
+gamma_mean > 0.6); gamma_min median 0.0010, gamma_mean median 0.5668.
+
+**That measurement is CONFOUNDED and is withdrawn as evidence against this
+family.** The gate meshed at a 1.5 mm target against a 0.2 mm trailing edge -
+7.5x coarser than the feature it had to resolve - which is exactly the Phase-4a
+sliver mechanism reproducing itself. It measures the mesh target, not the
+geometry, and it cannot distinguish a badly-swept blade from a well-swept one.
+It was originally reported as a caveat on the family's viability; that reading
+was wrong.
+
+**The free-form negative rests solely on the 0/4000 feasible fraction**, which
+is a property of the PARAMETERISATION and involves no mesh at all: it is
+computed from the spine and the section envelope, before anything is lofted.
+That number is not confounded by resolution and is what the fallback decision
+stands on.
+
+### The RMF seed convention was wrong, and the fix is measured
+
+The original seed projected the LOCAL RADIAL direction off the tangent. That is
+degenerate when the start tangent is parallel to the radial direction - exactly
+the tangent a blade leaving a hub cylinder has. It was not marginal: **that seed
+refused a straight radial spine, the canonical propeller, as a ValueError.**
+
+Re-seeded onto the rotation axis, `n0 = normalise(y_hat x t0)`. The direction
+was CHOSEN BY MEASUREMENT, not derived: three candidates share the identical
+degeneracy `|y_hat x t0|` and differ only in direction, and on a straight radial
+spine at fixed twist - the one configuration where the swept and radial
+representations must describe the same blade - only `y_hat x t0` reproduces
+`PropellerDesign`'s section orientation, to **1.1e-13 m**. The other two sit at
+exactly **+90** and **+180 degrees**; either would have silently redefined twist
+for every loop design (`seed_equivalence.py`).
+
+Conditioning improved with it. The pre-declared criterion - p95 seed-normal
+wobble <= 1.0 deg under a 1e-3 * radius_m perturbation - was UNSATISFIABLE under
+the radial seed (best cell 1.524 deg) and had to be re-derived at 1e-4. Under the
+axis seed it is **met unmodified** (0.584 deg), because the seed no longer reads
+P0 and the perturbation loses one route in. Thresholds `SEED_M_MIN = 0.50`,
+`SEED_D_MIN = 0.20`, both measured-passing cells (`rmf_seed_thresholds.py`).
+
+### Resumption order, if free-form is revisited
+
+1. **Bounded-turning-angle encoding** - the untested variant that directly
+   addresses the dominant failure. Draw consecutive control points as bounded
+   direction increments so the reachable curvature is bounded by the ENCODING
+   rather than filtered by a penalty. This is the change that would test whether
+   the failure is free-form geometry or this particular box.
+2. Chord bounds tied to the local curvature radius rather than fixed, so
+   `curvature_vs_section` cannot be violated by a large chord on a tight bend.
+3. Only then, more control points: 5 was chosen as the minimum that lets the
+   outbound and return legs bend independently, and raising it widens the
+   reachable family but also the self-intersection rate.
+
 ## Phase 2b (in progress): reduced structural solver
 `solvers/beam.py` replaces the null safety factor with a rotating-cantilever
 1-D beam FE on the shared stations (Euler-Bernoulli / Hermite elements,

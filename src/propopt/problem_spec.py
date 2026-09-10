@@ -16,11 +16,17 @@ from typing import Callable
 
 import numpy as np
 
-from .contracts import AeroSolver, EvalResult, PropellerDesign, StructResult
+from .contracts import (BLADE_TOPOLOGIES, AeroSolver, Design, EvalResult,
+                        LoopDesign, PropellerDesign, SolverError, StructResult)
 from .motor import DEFAULT_MOTOR, MotorSpec, solve_torque_equilibrium
+from .loop_geometry import (SweptFrames, blade_clearance_margin,
+                            curvature_margin, hub_junction_margin,
+                            section_radius, seed_normal,
+                            self_intersection_margin, spine_frames)
 from .stations import uniform_midpoint
 
 ObjFn = Callable[[EvalResult, StructResult], float]
+GeomFn = Callable[[Design], float]   # g(design) <= 0 is feasible
 SpacingFn = Callable[[float, float, int], tuple[float, ...]]  # (hub, tip, n) -> radii
 
 
@@ -43,6 +49,20 @@ class Constraint:
 
 
 @dataclass(frozen=True)
+class GeomConstraint:
+    """A constraint on the DESIGN alone, needing no solver result.
+
+    Separate from `Constraint` because its signature is different: geometric
+    feasibility (self-intersection, blade clearance, hub closure) is knowable
+    from the decoded design, before and independently of any aero or structural
+    evaluation. Kept OUT of `constraints` so `ProblemSpec.n_constr` - which
+    `optimize.py` passes to pymoo as `n_ieq_constr` - is unchanged, and the
+    radial path keeps exactly the constraint count it had."""
+    name: str
+    fn: GeomFn
+
+
+@dataclass(frozen=True)
 class ProblemSpec:
     n_var: int
     xl: np.ndarray
@@ -50,6 +70,12 @@ class ProblemSpec:
     decode: Callable[[np.ndarray], PropellerDesign]
     objectives: tuple[Objective, ...]
     constraints: tuple[Constraint, ...]
+    # ADDITIVE and defaulted: `radial_spec` constructs ProblemSpec positionally
+    # and does not pass this, so its signature, n_constr and behaviour are
+    # untouched. Nothing evaluates these inside the optimizer loop yet - wiring
+    # them into pymoo's G would change optimize.py, which is a separate
+    # propose-and-stop.
+    geom_constraints: tuple[GeomConstraint, ...] = ()
 
     @property
     def n_obj(self) -> int:
@@ -76,6 +102,14 @@ class ProblemSpec:
     def to_physical(self, f_min: np.ndarray) -> np.ndarray:
         """Recover physical objective values from MIN-form: F_min * senses."""
         return np.asarray(f_min, dtype=float) * self.senses
+
+    def eval_geom(self, design: Design) -> np.ndarray:
+        """Geometric feasibility of a decoded design; g <= 0 feasible."""
+        return np.array([g.fn(design) for g in self.geom_constraints], dtype=float)
+
+    @property
+    def geom_names(self) -> tuple[str, ...]:
+        return tuple(g.name for g in self.geom_constraints)
 
 
 def radial_spec(
@@ -188,3 +222,145 @@ def radial_spec(
                        / motor.i_max_a - 1.0),
         )
     return ProblemSpec(n_var, xl, xu, decode, objectives, constraints)
+
+
+def loop_spec(
+    n_ctrl: int = 5,
+    n_stations: int = 8,
+    radius_m: float = 0.127,
+    hub_radius_m: float = 0.01,
+    n_blades: int = 2,
+    topology: str = "loop_hub",
+    chord_bounds: tuple[float, float] = (0.006, 0.026),
+    twist_bounds: tuple[float, float] = (-0.35, 0.60),
+    rpm_bounds: tuple[float, float] = (2000.0, 12000.0),
+    axial_bound_radii: float = 0.60,
+    te_thickness_m: float = 2.0e-4,
+) -> ProblemSpec:
+    """Free-form 3-D loop spec (Phase 5, slice 5a) — GEOMETRY ONLY.
+
+    Sibling of `radial_spec` behind the same `ProblemSpec` interface. It
+    carries NO objectives and NO constraints: there is no loop-aware aero or
+    structural solver yet, and inventing placeholder objectives would let a
+    later reader mistake them for physics. Geometric feasibility is exposed
+    through `geom_constraints`, which nothing in the optimizer loop reads.
+
+    GENOME, in cylindrical coordinates about the rotation axis:
+        [r_1..r_K, theta_0..theta_{K-1}, y_0..y_{K-1}, chord_0..chord_{N-1},
+         twist_0..twist_{N-1}, rpm]
+    where K = n_ctrl. Control points are (r, theta, y) -> (r cos t, y, r sin t)
+    in the codebase frame (x tangential, y axial, z radial).
+
+    WHY CYLINDRICAL, AND WHY r IS BOX-BOUNDED. `LoopDesign` validates that every
+    control point lies inside the radius envelope and, for `loop_hub`, that both
+    endpoints sit on the hub cylinder — as ValueError, because a malformed
+    design is a programming error. A genome must never be able to reach those:
+    a ValueError propagating out of `decode` would abort the run instead of
+    being penalized. Encoding r directly and box-bounding it to
+    [hub_radius_m, radius_m] makes the envelope check unreachable by
+    construction, and for `loop_hub` r on the FIRST and LAST control points is
+    PINNED to hub_radius_m rather than encoded, which makes the endpoint check
+    unreachable too. Hence r_1..r_K carries only the free radii — K-2 of them
+    for `loop_hub`, K otherwise.
+
+    `n_ctrl = 5` (justified, not guessed): a clamped cubic needs >= 4. At 4 the
+    curve is a single Bezier segment whose endpoint tangents are forced along
+    P0->P1 and P2->P3, so with both endpoints pinned to the hub the only
+    remaining freedom is the two interior points, and the family cannot produce
+    an out-and-back arc with independent foot directions. 5 adds one interior
+    knot span, which is the minimum that lets the outbound and return legs bend
+    independently. Starting minimal is deliberate: more control points widen the
+    reachable family but also raise the self-intersection rate, and the gate is
+    meant to measure the base topology, not a tuned one.
+
+    `twist_bounds` opens to -0.35 rad, unlike the radial spec's 0.0 floor: a
+    loop's return leg travels the other way round the rotation, so its sections
+    need the opposite sign to make thrust in the same direction.
+
+    AXIAL EXTENT is bounded here, in the genome box (`axial_bound_radii`), not
+    in the contract — `Design` deliberately leaves it unbounded because it is a
+    design-quality question, not a well-formedness one.
+    """
+    if topology not in BLADE_TOPOLOGIES:
+        raise ValueError(f"topology must be one of {BLADE_TOPOLOGIES}, "
+                         f"got {topology!r}")
+    if n_ctrl < 4:
+        raise ValueError(f"a cubic spine needs >= 4 control points, got {n_ctrl}")
+    if n_stations < 2:
+        raise ValueError(f"a swept design needs >= 2 stations, got {n_stations}")
+
+    pinned = topology == "loop_hub"
+    n_free_r = n_ctrl - 2 if pinned else n_ctrl
+    y_max = axial_bound_radii * radius_m
+    n_var = n_free_r + 2 * n_ctrl + 2 * n_stations + 1
+
+    xl = np.concatenate([
+        np.full(n_free_r, hub_radius_m),
+        np.full(n_ctrl, -np.pi), np.full(n_ctrl, -y_max),
+        np.full(n_stations, chord_bounds[0]),
+        np.full(n_stations, twist_bounds[0]), [rpm_bounds[0]]])
+    xu = np.concatenate([
+        np.full(n_free_r, radius_m),
+        np.full(n_ctrl, np.pi), np.full(n_ctrl, y_max),
+        np.full(n_stations, chord_bounds[1]),
+        np.full(n_stations, twist_bounds[1]), [rpm_bounds[1]]])
+
+    # Stations are placed at uniform arc-length fractions. The endpoints are
+    # INCLUDED (s = 0 and 1): for a hub-closing loop those are the two feet,
+    # which are exactly the sections that must exist for the caps to close.
+    station_s = tuple(float(v) for v in np.linspace(0.0, 1.0, n_stations))
+
+    def decode(x: np.ndarray) -> LoopDesign:
+        x = np.asarray(x, dtype=float)
+        i = 0
+        r_free = x[i:i + n_free_r]; i += n_free_r
+        th = x[i:i + n_ctrl]; i += n_ctrl
+        y = x[i:i + n_ctrl]; i += n_ctrl
+        chord = x[i:i + n_stations]; i += n_stations
+        twist = x[i:i + n_stations]; i += n_stations
+        rpm = float(x[i])
+
+        r = (np.concatenate([[hub_radius_m], r_free, [hub_radius_m]])
+             if pinned else r_free)
+        ctrl = tuple((float(ri * np.cos(ti)), float(yi), float(ri * np.sin(ti)))
+                     for ri, ti, yi in zip(r, th, y))
+        if topology != "loop_hub":
+            raise SolverError(
+                f"topology {topology!r} is not implemented in slice 5a. "
+                "'loop_neighbour' (a blade closing on the next blade's root) "
+                "needs an inter-blade junction the sweep generator does not "
+                "build, and 'open' (a free tip) needs a tip-closure rule that "
+                "has not been chosen. Only 'loop_hub' is implemented.")
+
+        design = LoopDesign(
+            radius_m=radius_m, hub_radius_m=hub_radius_m, n_blades=n_blades,
+            rpm=rpm, topology=topology, spine_ctrl_m=ctrl,
+            station_s=station_s,
+            chord_m=tuple(float(v) for v in chord),
+            twist_rad=tuple(float(v) for v in twist))
+        # Seed conditioning is checked HERE, as a SolverError on the measured
+        # ill-conditioned band, so a genome landing there is penalized. The
+        # contract's exact-degeneracy ValueErrors sit strictly inside this band
+        # and are therefore unreachable from a genome.
+        seed_normal(np.asarray(ctrl[0]), np.asarray(ctrl[1]), radius_m)
+        return design
+
+    def _fr(d: Design) -> SweptFrames:
+        return spine_frames(d)
+
+    def _sec(d: Design) -> np.ndarray:
+        return section_radius(np.asarray(d.chord_m), te_thickness_m=te_thickness_m)
+
+    geom = (
+        GeomConstraint("curvature_vs_section",
+                       lambda d: curvature_margin(_fr(d), _sec(d))),
+        GeomConstraint("self_intersection",
+                       lambda d: self_intersection_margin(_fr(d), _sec(d))),
+        GeomConstraint("blade_clearance",
+                       lambda d: blade_clearance_margin(_fr(d), _sec(d), d.n_blades)),
+        GeomConstraint("hub_closure_tangent",
+                       lambda d: hub_junction_margin(_fr(d), _sec(d), d)[0]),
+        GeomConstraint("hub_closure_section",
+                       lambda d: hub_junction_margin(_fr(d), _sec(d), d)[1]),
+    )
+    return ProblemSpec(n_var, xl, xu, decode, (), (), geom)
