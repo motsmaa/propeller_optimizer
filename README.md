@@ -1,4 +1,4 @@
-# propopt — Phase 0 (scaffolding + frozen contracts)
+# propopt: Phase 0 (scaffolding + frozen contracts)
 
 Thin end-to-end slice: NSGA-II runs against placeholder evaluators through the
 frozen interface contracts, before any real physics exists.
@@ -11,18 +11,18 @@ src/propopt/
   motor.py          Phase 2c: BLDC motor model + torque-equilibrium root-find (Brent)
   hf/               Phase 4a: high-fidelity validators (NOT the inner loop)
     wsl.py          Windows<->WSL boundary: path translation + subprocess (4b reuses)
-    mesh.py         STL -> tet mesh via gmsh; volume-drift + quality gates
+    mesh.py         STL -> tet mesh via gmsh, volume-drift + quality gates
     occ_geometry.py slice 2: blade as an OCC B-rep solid + native tet meshing
-    hub_fillet.py   slice 3a: hub boss + root fillet; derived bounds, validity
+    hub_fillet.py   slice 3a: hub boss + root fillet, derived bounds, validity
     calculix.py     INP writer, ccx runner, .dat parser, CalculiXStructSolver
     SOURCE.md       toolchain provenance (ccx 2.21, gmsh 4.15.2, install route)
-  config.py         Phase 3: RunConfig (frozen) + build_run/run; single source of truth
+  config.py         Phase 3: RunConfig (frozen) + build_run/run, single source of truth
   configs/default.py Phase 3: the default RunConfig with justification per value
   analysis.py       Phase 3: hypervolume convergence + constraint-activity breakdown
   export.py         Phase 3: front -> JSON, selected designs -> STL
   plotting.py       Phase 3: scatter-matrix + parallel-coords (optional matplotlib)
   units.py          SI conventions + sanity-check assertions
-  problem_spec.py   config-driven spec; objectives bundle (name, sense, fn)
+  problem_spec.py   config-driven spec, objectives bundle (name, sense, fn)
   optimize.py       pymoo NSGA-II wiring + failed-eval penalty policy
   solvers/null.py   placeholder aero/struct (kept as tests/reference)
   solvers/bemt.py   Phase 1: static/hover BEMT aero, swappable polar seam
@@ -45,45 +45,45 @@ PYTHONPATH=src pytest -q
 ```
 
 ## Design notes
-- **Objectives are atomic** `(name, sense, fn)` triples; there is no parallel sign
+- **Objectives are atomic** `(name, sense, fn)` triples. There is no parallel sign
   array to keep in sync. Adding an objective is one tuple entry.
-- **`ParetoResult.F` is physical** (already un-negated); MIN-form lives only inside
+- **`ParetoResult.F` is physical** (already un-negated). MIN-form lives only inside
   the optimizer.
 - **Failed evaluations don't crash runs.** A `SolverError`, an out-of-range result
-  (caught by the sanity layer), or an arithmetic blow-up penalizes that candidate;
-  genuine programming errors still propagate. `ParetoResult.n_failed` reports the
+  (caught by the sanity layer), or an arithmetic blow-up penalizes that candidate,
+  but genuine programming errors still propagate. `ParetoResult.n_failed` reports the
   count so a high failure rate is visible.
 
 ## Definition of done (met)
 NSGA-II emits a non-empty, non-degenerate Pareto front of correct shape on the
-null evaluators; runs are reproducible by seed; a partially-failing solver
-completes with failures excluded from the front; contracts are frozen and sanity-checked.
+null evaluators. Runs are reproducible by seed. A partially-failing solver
+completes with failures excluded from the front. Contracts are frozen and sanity-checked.
 
 ## Phase 1 (closed): BEMT aero
 `solvers/bemt.py` implements static/hover blade-element momentum theory behind
 the frozen `AeroSolver` ABC (Prandtl tip+root losses, `SolverError` on
 non-convergence or degenerate input). Airfoil data enters only through a
-swappable `polar(alpha, Re) -> (Cl, Cd)` callable; the default analytic polar
-ignores Reynolds number; `solvers/polars.py` adds `TabulatedPolar`, a
+swappable `polar(alpha, Re) -> (Cl, Cd)` callable. The default analytic polar
+ignores Reynolds number. `solvers/polars.py` adds `TabulatedPolar`, a
 Re-interpolating table polar (currently NACA 4412 XFOIL data in
-`data/polars/`, a proxy section — see its SOURCE.md). Validation anchor:
+`data/polars/`, a proxy section, see its SOURCE.md). Validation anchor:
 `tests/test_validation_uiuc.py` compares BEMT against measured UIUC static
 data for the APC Slow Flyer 10x4.7 (raw files + provenance in `data/uiuc/`,
 parser in `validation/uiuc.py`), parametrized over three polars.
 
 ### Phase-1 closeout
-**The BEMT solver is validated as structurally correct; no residual anchor
+**The BEMT solver is validated as structurally correct, and no residual anchor
 error was traced into the solver.** Evidence: the fixed point is
-relaxation-independent (relax 0.2 vs 0.05 agree to ~1e-6 N); the predicted
-power-per-thrust ratio CP/CT matches measurement to ~3%; the high-RPM CT
-offset is stable across two independent polar sets; and station resampling is
+relaxation-independent (relax 0.2 vs 0.05 agree to ~1e-6 N), the predicted
+power-per-thrust ratio CP/CT matches measurement to ~3%, the high-RPM CT
+offset is stable across two independent polar sets, and station resampling is
 discretization-converged (20 vs 80 stations moves CT/CP ~0.1%).
 
 Residual anchor error is attributed to three input causes:
-1. **Non-matched proxy section** — 12%-thick NACA 4412 vs the real ~5%-thick
+1. **Non-matched proxy section**: 12%-thick NACA 4412 vs the real ~5%-thick
    thin cambered APC blade section. Dominates at low Re: with genuine
    sub-5e4 XFOIL tables, low-RPM CT error reaches -39% (thick sections
-   collapse at low Re in XFOIL; the real thin section does not).
+   collapse at low Re in XFOIL, but the real thin section does not).
 2. **Known-optimistic XFOIL Ncrit=9 profile drag at low Re** (laminar-bubble
    losses underpredicted), visible as the unreproduced CP-vs-RPM drift.
 3. **An unresolved split inside the stable ~-17% high-RPM CT offset** between
@@ -95,7 +95,7 @@ Residual anchor error is attributed to three input causes:
 Validation gates (justification embedded in the test's assert message and
 data/polars/SOURCE.md): the `analytic` and `tab-re5e4` anchor variants gate at
 **CT MAPE <= 20%, CP MAPE <= 25%**, scoped explicitly to validation against
-UIUC apcsf_10x4.7 using the non-matched 4412/Ncrit=9 proxy — these bounds
+UIUC apcsf_10x4.7 using the non-matched 4412/Ncrit=9 proxy. These bounds
 encode the diagnosed data limitation above, not solver accuracy (current:
 18.2%/20.2% and 16.6%/19.5%, both passing). The `tab-extended` (Re down to
 1e4) variant is **non-gating** (`xfail(strict=False)`): XFOIL at Re=1e4 on a
@@ -110,57 +110,57 @@ blade-datum/twist-convention audit to resolve the section-vs-datum fork in
 constraint on a decision.
 
 **A2 (RESOLVED in Phase 2c, Path 2):** `rpm` was a free design variable with no
-motor coupling. It is now solved from a motor-propeller torque equilibrium;
-throttle is the operating variable in the genome. See "Phase 2c" below.
+motor coupling. It is now solved from a motor-propeller torque equilibrium,
+and throttle is the operating variable in the genome. See "Phase 2c" below.
 
 ## Phase 2a (in progress): parametric geometry
-`geometry.py` lofts a parametric section (seam: `SectionFn`; default NACA
+`geometry.py` lofts a parametric section (seam: `SectionFn`, default NACA
 4412-like, matching the Phase-1 aero polar proxy) through the radial stations
 into a triangulated blade solid with named patches (`hub` root cap, `blade`
-skin, `tip` cap). Engine: pure-numpy structured loft — watertight BY
+skin, `tip` cap). Engine: pure-numpy structured loft, watertight BY
 CONSTRUCTION (closed-manifold connectivity is topological), ~1 ms/genome, no
 CAD kernel in the optimizer loop (a B-rep kernel is reserved for once-per-
-final-design STEP export later; OCC-class lofts are too slow/opaque for
+final-design STEP export later, because OCC-class lofts are too slow/opaque for
 thousands of genomes). Every build is verified closed-manifold + positive-
-volume; violations raise `SolverError`. `solvers/geom_mass.py` wires REAL
-mass (n_blades x volume x PLA density) into the optimizer; thrust/FoM/mass
+volume. Violations raise `SolverError`. `solvers/geom_mass.py` wires REAL
+mass (n_blades x volume x PLA density) into the optimizer. Thrust/FoM/mass
 are now real physics, safety factor/stress remain Phase-0 placeholders until
 Phase 2b. Anchor (`tests/test_geometry.py`): 100% watertight over 200 random
-in-bounds genomes; prism volume matches the shoelace-analytic value to 1e-12;
-degenerate genomes raise `SolverError`; BEMT numbers are pinned against the
+in-bounds genomes. Prism volume matches the shoelace-analytic value to 1e-12.
+Degenerate genomes raise `SolverError`. BEMT numbers are pinned against the
 shared-station refactor.
 
 **Shared stations (landed):** `PropellerDesign.station_r_m` carries the
 station radii (strictly increasing, within [hub, R]) as the single source of
-station placement; spacing schemes (`uniform_midpoint`, `cosine`) and the
+station placement. Spacing schemes (`uniform_midpoint`, `cosine`) and the
 quadrature-weights helper live in `stations.py`. BEMT, geometry and
-NullStruct all read the shared field — the duplicated uniform-midpoint
+NullStruct all read the shared field, so the duplicated uniform-midpoint
 assumptions are gone. Domain consistency: aero integrates midpoint-bounded
 cells clipped to [hub, R], and `solid_from_design` end-extends the loft to
 the same [hub, R], so aero and geometry describe the same interval. The
 refactor is regression-gated at rel 1e-12 (justification inline at the
 assertion in `tests/test_geometry.py`): with uniform-midpoint spacing the
-pinned Phase-1 BEMT values reproduce to <= 1 ulp (torque/power bitwise;
-thrust/FoM 1 ulp from quadrature-weight summation reassociation — diagnosed,
+pinned Phase-1 BEMT values reproduce to <= 1 ulp (torque/power bitwise,
+thrust/FoM 1 ulp from quadrature-weight summation reassociation, diagnosed,
 not a physics change). Dev/test-only dependency: `trimesh` independently
 cross-validates watertightness and volume in the test suite (skips if
-absent); it is deliberately NOT a runtime dependency — the package runtime
+absent). It is deliberately NOT a runtime dependency, meaning the package runtime
 stays numpy-only (+pymoo).
 
 Phase-2a assumptions and deliberate semantics:
 - **Quadrature**: each station owns the radial cell bounded by neighbour
-  midpoints, clipped to [hub, R]; weights always sum to the full span.
+  midpoints, clipped to [hub, R], and weights always sum to the full span.
 - **Loft end-extension**: chord/twist are held constant from the end stations
-  out to hub and R — no tip taper. Tip-rounding is a possible later
+  out to hub and R, meaning no tip taper. Tip-rounding is a possible later
   refinement, not current behaviour.
 - **Cosine spacing** samples cell midpoints in the stretched coordinate, so
   no station sits exactly on hub or tip.
 - **Single-station designs are valid** (intentional): end-extension yields a
-  3-section loft; core `build_blade_solid` still requires >= 2 explicit
+  3-section loft, and core `build_blade_solid` still requires >= 2 explicit
   sections.
 - **Failure layering (principle)**: the frozen contract rejects
   geometrically-impossible designs at construction (`ValueError`, e.g.
-  hub == tip / non-increasing stations); solvers reject contract-valid but
+  hub == tip / non-increasing stations). Solvers reject contract-valid but
   physically-unsolvable ones (`SolverError`, penalized by the optimizer).
 
 ### Placement twist-sign defect (found 2026-08, fixed)
@@ -170,7 +170,7 @@ Sections were rotated by **+twist** while the chord is laid out with the
 incompatible: the only rotation sense that leads with the nose then puts the
 blade at NEGATIVE incidence. Every lofted blade was effectively pitched
 nose-down, and no rotation direction made it a working propeller. The fix
-rotates by `-twist`; `station_rings` and `build_blade_solid` remain bitwise
+rotates by `-twist`. `station_rings` and `build_blade_solid` remain bitwise
 identical to each other.
 
 **Why nothing caught it for three phases.** No consumer of the geometry could
@@ -178,9 +178,9 @@ see it:
 
 | consumer | why it was blind |
 |---|---|
-| BEMT | reads `twist_rad` directly and uses \|Omega r\|; never touches the 3-D placement |
-| beam / structural | centrifugal magnitude and section bending; both placement-sign-invariant |
-| loft volume / mass | a proper rotation preserves volume; orientation-insensitive |
+| BEMT | reads `twist_rad` directly and uses \|Omega r\| but never touches the 3-D placement |
+| beam / structural | centrifugal magnitude and section bending, both placement-sign-invariant |
+| loft volume / mass | a proper rotation preserves volume, orientation-insensitive |
 | mesh quality, watertightness | topological, not orientational |
 
 Only a **3-D placement consumer** could observe it, and the project had none
@@ -193,7 +193,7 @@ attempts got it wrong in opposite directions before the measurement settled it.
 `assert_leading_edge_first` (chord vs direction of travel) and
 `assert_positive_incidence` (alpha = +asin(wind . n_suction), measured against
 the suction normal sampled at MATCHED chordwise indices). Each catches a
-different failure; neither alone would have caught this one.
+different failure, and neither alone would have caught this one.
 
 **Blast radius.** Loft volume and mass shift by **0.376%** (UIUC blade
 4.913726e-6 -> 4.895264e-6 m^3) from triangle-chording of the reversed twist.
@@ -202,11 +202,11 @@ well inside its 5% band, so **prior mass, structural and Pareto results stand**.
 Pinned BEMT references, UIUC anchors and the beam SF/f1 pins are unchanged to
 full precision.
 
-**Affected artifacts — every STL exported before this fix is pitched the wrong
+**Affected artifacts: every STL exported before this fix is pitched the wrong
 way and is not a valid propeller**, independent of CFD:
 `runs/decision/stl/blade_*.stl`, `runs/exploration/stl/*`, and any STL handed
 out from a Pareto front via `export.export_selected_stl`. Re-export them. The
-numbers those runs reported remain valid; only the printable orientation was
+numbers those runs reported remain valid, but only the printable orientation was
 wrong.
 
 ### Phase 4b baseline (good5): first physically-coherent CFD result
@@ -223,7 +223,7 @@ silently reported zeros for a parallel run).
 | measured UIUC @ 4590 rpm | 0.1200 | 0.0484 |
 | BEMT | 0.0996 (-17.0%) | 0.0384 (-20.7%) |
 
-The BEMT row previously read 0.0964 / 0.0381; that was **stale by 3.3% on CT**.
+The BEMT row previously read 0.0964 / 0.0381. That was **stale by 3.3% on CT**.
 The tracked value is whatever `tests/test_validation_uiuc.py::test_bemt_vs_uiuc_apcsf_10x47_static[tab-re5e4]`
 prints at 4590 rpm, which is 0.0996 / 0.0384. Corrected during rung 0, when the
 reprice needed the reference it was being compared against.
@@ -232,29 +232,29 @@ The three-way gap decomposes cleanly and multiplicatively:
 
 | step | ratio | attributable to |
 |---|---|---|
-| CFD / BEMT | x1.88 | see rung 0 and **rung 1** below - NOT the recirculation alone |
+| CFD / BEMT | x1.88 | see rung 0 and **rung 1** below, not the recirculation alone |
 | BEMT / measured | x1.20 | the Phase-1 residual (proxy section, transition, 3-D) |
 | product = CFD / measured | x2.26 | |
 
 alpha = +22.30 / +13.93 / +5.51 deg at root/mid/tip, equal to local twist to
 0.0000 deg. Forces stationary (thrust p-p 1.02%, torque 0.49% over the last 200
-iterations); residuals U ~9.5e-4, p 1.7e-6; mass conserved (net far-field flux
+iterations). Residuals U ~9.5e-4, p 1.7e-6. Mass conserved (net far-field flux
 8.2e-6 m^3/s).
 
-**What is right:** the inflow is textbook - smooth near-uniform acceleration
+**What is right:** the inflow is textbook: smooth near-uniform acceleration
 from -2.2 to -5.5 m/s over +2R to +0.5R, and a properly loaded annulus peaking
 -10.5 m/s at the tip radius.
 
 **What is not:** CT is -56% against measurement, and THE WAKE DOES NOT
 PROPAGATE. Volume flux (r<=2.5R) peaks at -1.482 m^3/s at -0.5R, collapses to
 -0.965 at -1R and REVERSES to +0.281 at -2R, where every radius is flowing back
-toward the rotor. No contraction, no flux conservation - a recirculating torus,
+toward the rotor. No contraction, no flux conservation: a recirculating torus,
 not a slipstream.
 
 This matters because it can no longer be blamed on a badly-loaded rotor (the
 earlier nose-down explanation, now falsified): the rotor IS loaded and the
 inflow IS coherent, and the wake still turns around within 1R. The
-induced-velocity ratio is therefore NOT reported - momentum theory's v_i
+induced-velocity ratio is therefore NOT reported, because momentum theory's v_i
 presumes a developed contracting slipstream, and quoting it here would repeat
 the phantom-thrust error made earlier in this phase.
 
@@ -270,18 +270,18 @@ result, not a failure: the eliminations are the deliverable.
 
 **RESOLVED, and the resolution is at the end of this chapter.** This section
 went through three readings. It originally continued "Transient sliding-mesh/AMI
-is required"; rung 1 removed that on the grounds that a clean-wake forward-flight
-case was still 41-47% low; the closing tests (rung 2 below) showed rung 1 had
+is required". Rung 1 removed that on the grounds that a clean-wake forward-flight
+case was still 41-47% low. The closing tests (rung 2 below) showed rung 1 had
 compared the CFD against the WRONG REFERENCE and restored the original reading.
 The settled position, with numbers, is in **"Phase 4b FINAL"** at the end. Read
-the rungs in order if you want the derivation; read the FINAL section if you
+the rungs in order if you want the derivation. Read the FINAL section if you
 want the answer.
 
 ### Independent finding: blade placement twist sign (real bug, fixed)
 
 Sections were rotated by +twist against a leading-edge-at--x convention, so
 every lofted blade was pitched nose-down and no rotation sense made it a working
-propeller. Fixed (rotate by -twist); guards added
+propeller. Fixed (rotate by -twist). Guards added
 (`tests/test_hf_rotation.py`). **Exported STLs before that fix are invalid
 propellers.** Loft volume/mass shifted 0.376%, inside the documented faceting
 band, so prior mass/structural/Pareto results stand. See the Phase-2a section.
@@ -302,7 +302,7 @@ band, so prior mass/structural/Pareto results stand. See the Phase-2a section.
 ### The established finding, stated precisely
 
 **The wake reversal is a numerical-diffusion artifact in the sense that COARSE
-wake meshes SUPPRESS it — it is not a real feature that fine meshes resolve.**
+wake meshes SUPPRESS it. It is not a real feature that fine meshes resolve.**
 Flux at -2R (r <= 1.5R) tracks wake cell size and nothing else:
 
 | wake cell | 2.75 mm | 5.5 mm | 11.0 mm |
@@ -315,7 +315,7 @@ across the two behaviours, so wall treatment cannot be the controlling variable
 and wake resolution can. The uncomfortable direction: our FINEST meshes show the
 recirculation, so refining further would make it worse, not better.
 
-### The CT deficit - rung 0, re-opened by rung 1, CLOSED by rung 2
+### The CT deficit: rung 0, re-opened by rung 1, CLOSED by rung 2
 
 CT sits at **-56% to -60%** against measured (0.1200) across every adequately
 converged variant, unmoved by everything in the table above.
@@ -327,9 +327,9 @@ opposite over-correction was also wrong**: remove the recirculation entirely (by
 running in forward flight, where the wake convects) and a -41% to -47% CT
 deficit REMAINS. Read the two together:
 
-* rung 0 is a statement of INTERNAL CONSISTENCY - the blade responds correctly
-  to whatever flow it is given, so there is no separate blade-force bug;
-* rung 1 is a statement about ROOT CAUSE - the recirculation is not it, because
+* rung 0 is a statement of INTERNAL CONSISTENCY: the blade responds correctly
+  to whatever flow it is given, so there is no separate blade-force bug.
+* rung 1 is a statement about ROOT CAUSE: the recirculation is not it, because
   the deficit survives without it.
 
 The recirculation is best read as a hover-specific AMPLIFIER (-56%) on top of a
@@ -340,11 +340,11 @@ aerodynamics rather than anything about the wake.
 **^ THAT PARAGRAPH IS WRONG. Rung 2 refuted it.** The forward-flight "base
 deficit" is not a CFD defect at all: blade-element theory with the SAME section
 proxy is -38% to -43% at the same conditions, so the CFD was never the outlier
-there. Rung 1 compared the CFD to MEASUREMENT, which carries the proxy error;
-the correct reference is blade-element theory with matched section physics.
+there. Rung 1 compared the CFD to MEASUREMENT, which carries the proxy error.
+The correct reference is blade-element theory with matched section physics.
 Against that reference the CFD is within 6% in forward flight and short by a
-factor 1.9 in hover ONLY. Rung 0's original reading - deficit and recirculation
-are one problem - is restored. See "Phase 4b FINAL".
+factor 1.9 in hover ONLY. Rung 0's original reading (deficit and recirculation
+are one problem) is restored. See "Phase 4b FINAL".
 
 ### Rung 0: reprice CT from the CFD's OWN inflow (post-processing, no solve)
 
@@ -355,7 +355,7 @@ BEMT uses (`bemt.py` lines 158/186, copied not re-derived). Cost ~18 s per case.
 
 **The direct reprice does NOT close as originally framed**: at the disc plane it
 gives CT 0.0251 against the CFD's directly-integrated 0.0530, a factor 0.47.
-alpha is small, so CT is hypersensitive to the sampling plane - 0.0641 at
+alpha is small, so CT is hypersensitive to the sampling plane: 0.0641 at
 y=+0.25R through 0.0251 at y=0 to 0.0002 at y=-0.25R. The bracket contains
 0.0530, but a method with that spread confirms nothing on its own.
 
@@ -369,14 +369,14 @@ measured disc-plane inflow be scaled to reproduce a given CT?
 | measured CT 0.1200 | 0.45 | 3.8 m/s |
 
 The CFD's thrust is consistent with its own measured inflow to within 14%.
-BEMT's CT needs a 39% inflow reduction and measurement 55% - neither value
+BEMT's CT needs a 39% inflow reduction and measurement 55%. Neither value
 occurs anywhere in the field, at any plane or radius. k = 0.86 rather than 1.00
 is expected, not residual: sampling at y=0 is sampling IN the blade plane, so it
 includes part of the blade's own bound-vortex downwash, which blade-element
 theory accounts for through the lift itself rather than through the inflow.
 
 **Summary statistic:** BEMT's local inflow is ~1.15x its own momentum-theory
-ideal (5.2-5.9 vs 4.89 m/s at its 2.97 N) - normal for a real rotor. The CFD's
+ideal (5.2-5.9 vs 4.89 m/s at its 2.97 N), normal for a real rotor. The CFD's
 is **2.35x** its own. That gap is the entire anomaly.
 
 **Recirculation, measured directly** rather than inferred from a single ray
@@ -389,14 +389,14 @@ is **2.35x** its own. That gap is the entire anomaly.
 | r/R 1.00 | 7.01 | 8.66 | 10.09 | 11.11 | 11.83 |
 
 Two signatures. The air arrives **already at 70% of its disc-plane speed a
-quarter-radius upstream** - a real hover slipstream accelerates from ~0 far
-upstream to v_i at the disc; this one is pre-accelerated because it is being
+quarter-radius upstream**, whereas a real hover slipstream accelerates from ~0 far
+upstream to v_i at the disc. This one is pre-accelerated because it is being
 recycled. And the inner disc carries **negative** downstream axial velocity
 (-1.3 to -1.6 m/s at r/R 0.15-0.20): flow returning up through the rotor. That
 is the torus core, measured.
 
 **The alpha(r) collapse.** alpha falls from +8.95 deg at the root monotonically
-through **zero at r/R = 0.639**, reaching -3.9 deg at the tip; 9 of 20 stations
+through **zero at r/R = 0.639**, reaching -3.9 deg at the tip. 9 of 20 stations
 sit at negative incidence, against BEMT's +2.3 to +9.4 deg everywhere positive.
 
 | r/R | alpha BEMT | alpha CFD | dT/dr BEMT | dT/dr CFD |
@@ -407,7 +407,7 @@ sit at negative incidence, against BEMT's +2.3 to +9.4 deg everywhere positive.
 | 0.94 | 2.33 | -3.17 | 23.3 | **-13.1** |
 
 Precision point: NACA 4412 has alpha_0L ~ -4 deg, so negative alpha here is LOW
-lift, not REVERSED lift - those stations still net +0.15 N of the 0.75 N total.
+lift, not REVERSED lift, because those stations still net +0.15 N of the 0.75 N total.
 dT/dr turns negative only outboard of r/R ~ 0.82, where Cl ~ 0 and the
 -Cd sin(phi) drag projection takes over. The blade's entire outer working
 section, normally where most thrust is made, is simply unloaded.
@@ -416,9 +416,9 @@ section, normally where most thrust is made, is simply unloaded.
 (2,500) at k = 0.867 vs 0.858 and the identical zero crossing r/R = 0.639, ~1%
 apart, well inside the 3.6% force noise floor. Polar-set-independent (Re>=5e4
 0.0251, extended 0.0224). Not blade contamination (all azimuths 0.0164 vs
-excluded 0.0251, same verdict; 28 valid samples per radial bin). Co-rotating
+excluded 0.0251, same verdict, with 28 valid samples per radial bin). Co-rotating
 swirl is present with the physically correct sign and makes it slightly worse
-(0.0193); BEMT neglects swirl entirely, so that is a minor extra term, not a
+(0.0193). BEMT neglects swirl entirely, so that is a minor extra term, not a
 driver.
 
 **Conclusion: the blade is responding correctly to the flow it is given.** No
@@ -432,17 +432,17 @@ blade force and the local flow is compatible with BOTH "the wake is wrong and
 the blade follows it" AND "the blade is weak and the wake follows that". Rung 1
 discriminates, and finds the deficit survives with a clean wake.
 
-### Rung 1: advancing-flow validation - the "second problem" was a REFERENCE ERROR
+### Rung 1: advancing-flow validation. The "second problem" was a REFERENCE ERROR
 
 `run_advancing.py`. Same mesh resolution, same MRF zone, same SST, same
-placement, same potentialFoam init as good5 - ONLY the freestream differs. Two
+placement, same potentialFoam init as good5: only the freestream differs. Two
 points at 5018 rpm taken verbatim from measured rows of
-`apcsf_10x4.7_kt0837_5018.txt` (no interpolation of the reference at all; rpm is
+`apcsf_10x4.7_kt0837_5018.txt` (no interpolation of the reference at all, and rpm is
 matched to the file rather than to the hover point, because CT is weakly
 rpm-dependent through Reynolds).
 
-At V > 0 the helical wake CONVECTS - 0.70R per revolution at J=0.349 (blade
-passage 0.35R) - so the frozen-rotor assumption is inside its validity envelope,
+At V > 0 the helical wake CONVECTS (0.70R per revolution at J=0.349, blade
+passage 0.35R), so the frozen-rotor assumption is inside its validity envelope,
 which hover never was. This isolates the pipeline from hover steadiness.
 
 | | J | CT CFD | CT meas | err | CP err | eta err |
@@ -453,7 +453,7 @@ which hover never was. This isolates the pipeline from hover steadiness.
 **The wake is not the problem here and the solve is not the problem either.**
 The slipstream convects cleanly with no reversal at any downstream station
 (Uy stays negative from +5R through -5R, peaking just aft of the disc). Residuals
-reach Uy 1.3e-4 / p 3.1e-6 and forces are stationary to 0.15% peak-to-peak -
+reach Uy 1.3e-4 / p 3.1e-6 and forces are stationary to 0.15% peak-to-peak,
 roughly 7x steadier than good5's hover 1.02%. Net far-field flux ~1e-6 m^3/s.
 This is a well-converged, correct-topology solution that is still 41-47% low.
 
@@ -464,16 +464,16 @@ upstream of hover steadiness, and the transient campaign is not justified.**
 CT numbers above are correct and reproducible. What was wrong was comparing them
 to MEASUREMENT. Measurement carries the NACA 4412 proxy error, and blade-element
 theory carries exactly the same error: forward-flight BET with the 4412 proxy
-gives CT 0.0407 at J=0.349 against the CFD's 0.0416 - **agreement to 2.3%** -
+gives CT 0.0407 at J=0.349 against the CFD's 0.0416 (**agreement to 2.3%**),
 while both sit ~43% below the measured 0.0709. The CFD was never the outlier in
 forward flight. A 10% band around measurement was the wrong test to apply,
 because no method using this section can enter that band. See rung 2.
 
 Supporting signatures, all pointing the same way as hover:
 
-* CT/CP is 1.49 against a measured 1.72 - lift collapses, drag does not. The
+* CT/CP is 1.49 against a measured 1.72: lift collapses, drag does not. The
   same fingerprint as the hover case and as the historical backwards-blade bug.
-* The error GROWS with J (-41.3% -> -46.6%), so it is not a constant offset; the
+* The error GROWS with J (-41.3% -> -46.6%), so it is not a constant offset. The
   CT(J) slope is wrong too.
 * Disc-plane axial excess over momentum-theory v_i is 1.74x (J=0.349) and 1.80x
   (J=0.460), against 2.35x in hover. INDICATIVE ONLY: that is a single-ray disc
@@ -491,23 +491,23 @@ lift-collapses-drag-persists error.
 
 This CORRECTS an earlier assessment recorded during the rung-0 review, which
 argued that transition modelling was inside the -20% BEMT band and would not
-move CT materially. That argument assumed the CFD-specific gap was inflow;
-rung 1 removed the inflow explanation, and fully-turbulent RANS at low Re is now
+move CT materially. That argument assumed the CFD-specific gap was inflow.
+Rung 1 removed the inflow explanation, and fully-turbulent RANS at low Re is now
 the prime suspect rather than a dismissed one.
 
-**Cheapest next discriminator:** a 2-D section study - fully-turbulent RANS vs
-XFOIL-with-transition on NACA 4412 at Re 2e4-7e4 - isolates the section penalty
+**Cheapest next discriminator:** a 2-D section study (fully-turbulent RANS vs
+XFOIL-with-transition on NACA 4412 at Re 2e4-7e4) isolates the section penalty
 from everything rotor-shaped at hours-scale cost and needs no rotor mesh at all.
 It was run next. It REFUTED this hypothesis.
 
 ### 2-D section discriminator: transition REFUTED as the cause
 
 `src/propopt/hf/airfoil_case.py`, `run_airfoil_polar.py`, `price_rans_polar.py`.
-2-D cfMesh (`cartesian2DMesh`; snappyHexMesh cannot be used, its octree refines
+2-D cfMesh (`cartesian2DMesh`, since snappyHexMesh cannot be used, as its octree refines
 isotropically and would split the span direction). Held identical to the rotor
 case: the SAME section polygon the blade is lofted from including its finite TE,
 kOmegaSST, `nutkWallFunction`, the rotor's fvSchemes/fvSolution, rho and nu. ONE
-mesh serves every angle - the airfoil is fixed and the FREESTREAM is rotated,
+mesh serves every angle: the airfoil is fixed and the FREESTREAM is rotated,
 using the same freestreamVelocity/freestreamPressure far field added for rung 1,
 so no per-alpha meshing difference can masquerade as an alpha trend. Measured
 y+ 5.9-31, against the rotor's 11-83.
@@ -555,7 +555,7 @@ policy and only the DATA differ:
 | rotor CFD (3-D MRF) | 0.0530 | 0.0314 |
 | measured | 0.1200 | 0.0484 |
 
-**Every section model - three XFOIL variants and fully-turbulent RANS - prices
+**Every section model (three XFOIL variants and fully-turbulent RANS) prices
 to CT 0.094-0.100. The rotor CFD gives 0.053. The section model is not the
 discriminator.** Swapping transitional XFOIL for fully-turbulent RANS moves CT
 *up* by 4.3%, i.e. the wrong way: adding a transition model to the rotor CFD
@@ -571,14 +571,14 @@ Decomposition of the total -55.8% rotor gap, by share of the log-gap:
 
 **Mesh sensitivity, and its limits.** The sweep mesh is deliberately at the
 ROTOR's own surface resolution (1.57% of chord vs the rotor's 0.6-1.2%), so the
-Re 5e5 validation - run at 0.13% of chord - does not validate it. Refining to
+Re 5e5 validation (run at 0.13% of chord) does not validate it. Refining to
 0.78% raises Cl by about +0.06 and refining again to 0.38% adds only ~+0.01, so
 Cl is converging, and the sweep mesh UNDER-predicts Cl. That STRENGTHENS the
 conclusion: a better-resolved section makes even more lift, moving further from
 the rotor's 0.053, not toward it. Two honest limits: the surface cell is
 isotropic, so chordwise resolution and y+ move together and a shift cannot be
 attributed to one alone (the same confound class as the rotor's
-`rotor_region_level` test); and the finest level DIVERGED at Re 2e4 under both
+`rotor_region_level` test), and the finest level DIVERGED at Re 2e4 under both
 `nutkWallFunction` and `nutUSpaldingWallFunction` (Cl 2.91 and -5.84, negative
 Cd) despite excellent mesh quality, so it is discarded rather than reported as a
 refinement. Where both wall treatments are valid they agree to ~0.02 in Cl, so
@@ -587,7 +587,7 @@ the wall function is not the driver.
 **What this does NOT separate.** The NACA 4412 proxy is not the real APC Slow
 Flyer section, and this study cannot test that: it compares two MODELS of the
 same proxy geometry. A separate observation from `alpha_range.py` does bear on
-it - at J=0.460, even the momentum-consistent inflow at the MEASURED thrust puts
+it: at J=0.460, even the momentum-consistent inflow at the MEASURED thrust puts
 the blade at alpha -4.1 .. -1.3 deg, where the XFOIL 4412 polar returns Cl <= 0
 (its zero-lift angle is -2.4 deg at Re 8e4, degrading to -0.9 deg at Re 2e4
 through low-Re decambering), yet the real propeller measurably produces
@@ -595,8 +595,8 @@ CT=0.0486. A section that cannot make positive lift at the measured operating
 point is not the section on that blade. That is a proxy-SHAPE finding,
 independent of transition, and it is bounded by the BEMT_XFOIL/measured step
 above (-17%) rather than by the 75% rotor-level residual. Resolving it needs
-matched-section polars, which needs the real APC coordinates - not available in
-the UIUC database, which publishes planform only.
+matched-section polars, which needs the real APC coordinates (not available in
+the UIUC database, which publishes planform only).
 
 **Where this leaves the CT deficit: 75% of it is rotor-level.** Not the section
 model (this study), not domain, BC, MRF zone, wall treatment, blade surface
@@ -604,9 +604,9 @@ resolution or iteration count (the elimination table above).
 
 **Rung 2 then identified that 75%: it is HOVER-SPECIFIC and it is the wake.**
 The 0.542 ratio in the table above is the hover rotorCFD/BET_RANS number. Repeat
-it in forward flight, where the wake convects, and it becomes 0.944 - the same
+it in forward flight, where the wake convects, and it becomes 0.944: the same
 comparison, the same section physics, no defect. The "rotor-level residual" is
-not a general 3-D penalty; it exists only at V=0. The line above reading "not
+not a general 3-D penalty. It exists only at V=0. The line above reading "not
 the wake (rung 1)" is therefore wrong, and rung 1's premise is what was wrong.
 
 ### Rung 2: the reference was wrong, not the CFD (post-processing only)
@@ -627,22 +627,22 @@ blade-force code path:
 
 Including the far-field viscous term (reported: +0.139 / -0.040 / -0.007 N)
 moves good5 to 1.516 N (0.96). Across every sign convention the ratio is
-0.87-0.99; mass conserved to 1e-6 m^3/s. The hypothesis under test required
+0.87-0.99. Mass conserved to 1e-6 m^3/s. The hypothesis under test required
 1.7x. Two independent integrations agree, so the low thrust is REAL and momentum
 does not leak at the MRF zone interface.
 
 **2.2 The deficit is not uniform in span.** Spanwise loading integrated from the
 blade surface (VTK dump, `rho*p*Sf` per face, cross-checked against `force.dat`
-pressure to 0.00%; pressure is 99.3% of thrust). Hover, CFD/BEMT by station:
+pressure to 0.00%, and pressure is 99.3% of thrust). Hover, CFD/BEMT by station:
 1.05 at r/R 0.225, 0.71 at 0.525, 0.44 at 0.725, 0.26 at 0.925, **0.18 at
 0.975**. The blade matches BEMT inboard and makes almost nothing at the tip.
 
 **2.3 Blade surface resolution: ELIMINATED as the cause of that collapse.** Four
 completed runs differ ONLY in surface refinement, halving the cell each step
-(W23 1.376 mm -> W34 0.688 -> good5 0.344 -> SURF56 0.172; 5.2k -> 126k blade
-faces). Integrated outboard load (>0.60R): 0.6376, 0.7139, 0.6960, 0.6432 -
+(W23 1.376 mm -> W34 0.688 -> good5 0.344 -> SURF56 0.172, 5.2k -> 126k blade
+faces). Integrated outboard load (>0.60R): 0.6376, 0.7139, 0.6960, 0.6432:
 **a 12% non-monotonic wobble across an 8x refinement.** The total CT was already
-known to be flat here; what is new is that the SPANWISE split is flat too, so a
+known to be flat here. What is new is that the SPANWISE split is flat too, so a
 compensating inboard/outboard trade is ruled out as well.
 
 MRF zone axial extent moves it (B_mrf40: outboard +28%, inboard -28%, net
@@ -651,7 +651,7 @@ RADIAL zone remains untested.
 
 **2.4 THE RESULT: the CFD reproduces blade-element theory in forward flight and
 fails only in hover.** propopt's BEMT is hover-only, so `fwd_bemt.py` adds the
-standard forward-flight extension - same blade-element integral, same polar
+standard forward-flight extension: same blade-element integral, same polar
 seam, axial momentum balance carrying the freestream. VALIDATED: at V=0 it
 reproduces the tracked hover BEMT to **six significant figures** (dCT -0.000%).
 Both sides then use the CFD's OWN 2-D RANS section polar, so section physics is
@@ -668,7 +668,7 @@ Correcting the RANS polar for the 2-D mesh under-resolution (uniform dCl up to
 **contrast is 1.62-1.74x and robust**.
 
 With the 4412 proxy on both sides instead, BET gives CT 0.0407 at J=0.349
-against the CFD's 0.0416 - agreement to **2.3%** - with both ~43% below the
+against the CFD's 0.0416 (agreement to **2.3%**) with both ~43% below the
 measured 0.0709.
 
 **Conclusion: there is no forward-flight CFD defect. There never was.** Rung 1
@@ -676,23 +676,23 @@ measured correctly and compared to the wrong reference: measurement carries the
 section-proxy error, and blade-element theory carries the identical error, so a
 "within 10% of measurement" test could not be passed by ANY method using this
 section. Against matched-section blade-element theory the CFD is within 6% at
-J=0.349 and short by a factor 1.9 in hover only - which is exactly where the
+J=0.349 and short by a factor 1.9 in hover only, which is exactly where the
 recirculating wake is. Rung 0's original reading is restored.
 
 ### k-epsilon: UNTESTED BY DEFAULT, not eliminated
 
-Two bounded attempts both diverged (Fy -> -2.0e+65 at iteration 6; 1.0e+93 at
+Two bounded attempts both diverged (Fy -> -2.0e+65 at iteration 6, 1.0e+93 at
 iteration 8 with a derived free-stream pair at nu_t/nu = 1.00 and relaxation
 reduced to 0.5 on the turbulence equations). **This does NOT show the turbulence
-model is irrelevant** - only that k-epsilon could not be made to run within the
+model is irrelevant**, only that k-epsilon could not be made to run within the
 agreed budget. Unexplored: bounded/limited schemes on epsilon, staged startup,
 alternative near-wall treatment. Do not read this row as a completed test.
 Discretisation schemes and the frozen-rotor assumption itself are likewise
 untested.
 
-### Transient sizing - a COST ESTIMATE, not a commitment
+### Transient sizing: a COST ESTIMATE, not a commitment
 
-Anchors: 1.19M cells -> 2.7 GB, 2.8 s/iter steady on 8 cores; shipped transient
+Anchors: 1.19M cells -> 2.7 GB, 2.8 s/iter steady on 8 cores. Shipped transient
 propeller tutorial 526k cells, 3073 steps, 1.8 h on 4 ranks. Hover needs ~360
 steps/rev (1 deg/step at 4590 rpm) and 8-10 revs to develop -> ~3000-3600 steps,
 each 3-5x a steady iteration.
@@ -707,12 +707,12 @@ each 3-5x a steady iteration.
 locally: does not fit. Needs >=32 GB/node and 32-64 cores, ~2500-4000
 core-hours.
 
-**Status: justified, costed, and DECLINED.** Rung 1 briefly made it unjustified;
-rung 2 restored the justification (the hover-only factor 1.9 is exactly what a
+**Status: justified, costed, and DECLINED.** Rung 1 briefly made it unjustified,
+but rung 2 restored the justification (the hover-only factor 1.9 is exactly what a
 transient sliding-mesh run would address). It is not being run, for a reason
 that has nothing to do with whether it would work: the core-hours are not
 available, and the spend would buy only ONE of the two known error terms. The
-other - the NACA 4412 proxy standing in for an unpublished APC section - is
+other (the NACA 4412 proxy standing in for an unpublished APC section) is
 untouched by any amount of solver quality and is the larger term at every
 advance ratio tested. Converging precisely on the wrong aerofoil is not worth
 2500-4000 core-hours.
@@ -721,31 +721,31 @@ advance ratio tested. Converging precisely on the wrong aerofoil is not worth
 
 k-epsilon failed on THREE missing dictionary entries (`epsilon` field writer,
 `div(phi,epsilon)`, `fvSolution` solver entry) that surfaced only on first use,
-after two diverged 2-hour runs. A case-writer smoke test - build + mesh + 2
-iterations on a tiny mesh - finds this class in seconds. **Before any large
+after two diverged 2-hour runs. A case-writer smoke test (build + mesh + 2
+iterations on a tiny mesh) finds this class in seconds. **Before any large
 compute commitment, exercise every config field once.** `runs/audit.py` is that
 harness.
 
-Pre-flight audit, 19 configurations, ~20 minutes. First run **16 passed / 3 failed**; all three fixed, now **19/19**. The harness distinguishes a genuine pass from an EXPECTED REFUSAL, so a guard that correctly refuses a degenerate configuration counts as a pass and a guard that silently accepts one counts as a failure:
+Pre-flight audit, 19 configurations, ~20 minutes. First run **16 passed / 3 failed**. All three fixed, now **19/19**. The harness distinguishes a genuine pass from an EXPECTED REFUSAL, so a guard that correctly refuses a degenerate configuration counts as a pass and a guard that silently accepts one counts as a failure:
 
 | field | first run | after fix |
 |---|---|---|
-| `turbulence_model=SpalartAllmaras` | FAIL - missing `0/nuTilda` (same class as the epsilon gaps) | **OK** - field + `div(phi,nuTilda)` + solver entry added |
-| `n_layers=3` (relative sizing) | FAIL - topoSet point-count mismatch on a layered mesh | **OK** - `topoSet` no longer pinned to `-constant`; layer addition moves points, so a stale point count was read |
-| `periodic=True` (180 sector) | FAIL - cyclic face-area mismatch 66.7% | **OK (refused)** - now raises `SolverError` up front rather than producing a bad mesh; the geometry is NOT fixed, the degeneracy is documented and the caller is pointed at `periodic=False` |
+| `turbulence_model=SpalartAllmaras` | FAIL: missing `0/nuTilda` (same class as the epsilon gaps) | **OK**: field + `div(phi,nuTilda)` + solver entry added |
+| `n_layers=3` (relative sizing) | FAIL: topoSet point-count mismatch on a layered mesh | **OK**: `topoSet` no longer pinned to `-constant`, layer addition moves points, so a stale point count was read |
+| `periodic=True` (180 sector) | FAIL: cyclic face-area mismatch 66.7% | **OK (refused)**: now raises `SolverError` up front rather than producing a bad mesh, but the geometry is NOT fixed, the degeneracy is documented and the caller is pointed at `periodic=False` |
 | kOmega, kEpsilon, realizableKE, inletOutlet, nutUSpalding, core_radii, core_cell_frac, stl_size_m, n_chord, te_thickness_m, write_interval, rho, nu, mrf_zone_radii, mrf_zone_half_height_radii | pass |
 
-Note `kEpsilon` now PASSES the smoke test - the dictionary gaps are fixed; it is
+Note `kEpsilon` now PASSES the smoke test: the dictionary gaps are fixed, but it is
 the SOLVE that diverges. Those are different failures and should not be conflated.
 
 **Extended to 21 configurations for rung 1** (`preflight_audit.py`), adding
 `axial_inflow_m_s=7.41` and an expected-refusal case for a NEGATIVE inflow (the
-writer owns the freestream sign; a caller must not be able to model a rotor
+writer owns the freestream sign, and a caller must not be able to model a rotor
 flying backwards through its own wake). 21/21.
 
 That run also closed a gap in the HARNESS itself: `potentialFoam` is used by
 every real run but was never in the smoke chain, and it auto-creates `Phi` with
-the boundary TYPES copied from `p` - so any change to the p far-field BC
+the boundary TYPES copied from `p`, so any change to the p far-field BC
 silently changes the Laplace problem it solves. It is now in the chain. This is
 the standing rule applied to the rule's own instrument: a stage that every run
 depends on was itself unexercised.
@@ -755,7 +755,7 @@ object's `binData` sub-dict (spanwise force binning) is SILENTLY IGNORED by this
 OpenFOAM build: it accepted the dictionary without warning and wrote totals
 only, no `force_bin.dat`. Nothing errored. The spanwise loading in rung 2 was
 therefore computed independently, by dumping the blade patch to VTK and
-integrating `rho*p*Sf` per face in Python - cross-checked against `force.dat`'s
+integrating `rho*p*Sf` per face in Python, cross-checked against `force.dat`'s
 pressure component to 0.00%. The lesson generalises past config FIELDS to
 FUNCTION-OBJECT OPTIONS: an unexercised option is an unvalidated option, and
 this class fails silently rather than loudly.
@@ -768,8 +768,8 @@ and is confined to hover.
 
 | term | size | cause | fixable? |
 |---|---|---|---|
-| hover-only | **x1.9** | recirculating wake: steady frozen-rotor MRF has no valid solution at V=0, where the helix does not convect and stands as a stack of vortex rings. Tracks wake CELL SIZE and nothing else - coarse meshes suppress it, fine ones reveal it. | yes, by transient sliding-mesh/AMI: **~2500-4000 core-hours, DECLINED** |
-| all conditions, grows with J | -18.5% at hover, -38% at J=0.349, -60% at J=0.460 | NACA 4412 proxy for an unpublished APC Slow Flyer section. Shared with BEMT, so it is NOT a CFD error. Grows with J because alpha falls toward the section's zero-lift angle, where a wrong alpha_0L dominates. | **no** - needs the real APC coordinates; UIUC publishes planform only |
+| hover-only | **x1.9** | recirculating wake: steady frozen-rotor MRF has no valid solution at V=0, where the helix does not convect and stands as a stack of vortex rings. Tracks wake CELL SIZE and nothing else: coarse meshes suppress it, fine ones reveal it. | yes, by transient sliding-mesh/AMI: **~2500-4000 core-hours, DECLINED** |
+| all conditions, grows with J | -18.5% at hover, -38% at J=0.349, -60% at J=0.460 | NACA 4412 proxy for an unpublished APC Slow Flyer section. Shared with BEMT, so it is NOT a CFD error. Grows with J because alpha falls toward the section's zero-lift angle, where a wrong alpha_0L dominates. | **no**: needs the real APC coordinates, and UIUC publishes planform only |
 
 **Why the chapter closes here rather than with a transient campaign.** The
 campaign is justified and costed, and it would buy the smaller of the two terms.
@@ -780,34 +780,34 @@ returns Cl <= 0, while the real propeller measurably produces CT=0.0486. A
 section that cannot make positive lift at the measured operating point is not
 the section on that blade.
 
-**What Phase 4b delivered.** The pipeline is validated end to end - geometry,
+**What Phase 4b delivered.** The pipeline is validated end to end: geometry,
 mesh, MRF (Taylor-Couette to 0.24%), force extraction (two independent
 integrations agreeing to 0.87-0.99), and section modelling (2-D lift slope
-2*pi/rad, alpha_0L -4.01 deg against the textbook -4.1) - and it reproduces
+2*pi/rad, alpha_0L -4.01 deg against the textbook -4.1), and it reproduces
 blade-element theory wherever the underlying model is valid. It found and fixed
 a real blade-placement twist-sign bug that invalidated every STL exported before
 it. It established the validity boundary of steady MRF empirically rather than
 by assertion. What it does not deliver is agreement with measurement, and the
 reason is now known and quantified rather than open.
 
-**If this is ever resumed**, in cost order: (1) obtain real section coordinates -
+**If this is ever resumed**, in cost order: (1) obtain real section coordinates:
 a reference propeller with published geometry, or measure the APC blade directly.
-This is the larger term and costs no core-hours; (2) a larger RADIAL MRF zone,
-one ~2 h run, the only zone variation never tested; (3) the transient campaign,
+This is the larger term and costs no core-hours. (2) a larger RADIAL MRF zone,
+one ~2 h run, the only zone variation never tested. (3) the transient campaign,
 only after (1), so the wake fix is not spent on the wrong aerofoil.
 
-### FIVE overturned conclusions - the pattern is the lesson
+### FIVE overturned conclusions: the pattern is the lesson
 
 Every one failed the same way: **reasoning from a derived proxy instead of
 integrating the thing itself, or comparing against the wrong reference.**
 
 | claim | overturned by | what was actually wrong |
 |---|---|---|
-| CT deficit and wake are one problem (rung 0) | rung 1 | premature - but it was RIGHT, and rung 1's refutation was the error |
+| CT deficit and wake are one problem (rung 0) | rung 1 | premature, but it was RIGHT, and rung 1's refutation was the error |
 | transition modelling is the prime suspect (rung 1) | 2-D study | fully-turbulent RANS makes MORE lift than XFOIL at low Re, not less: wrong sign |
-| the flow carries measured-thrust momentum (rung 2 planning) | test 2.1 | uniform-slipstream v_i = f(T) is invalid here; the rigorous control volume disagrees |
+| the flow carries measured-thrust momentum (rung 2 planning) | test 2.1 | uniform-slipstream v_i = f(T) is invalid here, because the rigorous control volume disagrees |
 | blade surface under-resolution is the prime suspect (rung 2 planning) | test 2.3 | 8x refinement moves outboard load 12%, non-monotonically |
-| a second problem exists upstream of hover steadiness (rung 1) | test 2.4 | compared CFD to MEASUREMENT; the right reference is BET with matched section physics |
+| a second problem exists upstream of hover steadiness (rung 1) | test 2.4 | compared CFD to MEASUREMENT, but the right reference is BET with matched section physics |
 
 The tests that settled matters were all direct integrations against a
 like-for-like reference. The ones that misled were all ratios of derived
@@ -818,14 +818,14 @@ quantities.
 **Outcome: 39.6% watertight-and-meshable over 240 random in-bounds genomes,
 against a pre-declared ~90% bar. Falling back to a restricted template family.**
 
-**SCOPE OF THIS NEGATIVE - read this before citing it.** It indicts ONE
+**SCOPE OF THIS NEGATIVE: read this before citing it.** It indicts ONE
 parameterisation under ONE sampler: a 5-control-point clamped cubic B-spline
 with control points drawn UNIFORMLY AND INDEPENDENTLY over a cylindrical
 (r, theta, y) box. It does NOT say free-form geometry generation is
 unworkable, and it does not say B-spline spines are unworkable. A
-bounded-turning-angle encoding of the same space - where consecutive control
+bounded-turning-angle encoding of the same space (where consecutive control
 points are drawn as bounded increments in direction rather than independently
-in position, so the reachable curvature is bounded by the encoding - is
+in position, so the reachable curvature is bounded by the encoding) is
 UNTESTED and is named in the resumption order below. The code path is kept.
 
 ### What worked, and is reused unchanged
@@ -834,18 +834,18 @@ UNTESTED and is named in the resumption order below. The code path is kept.
   positive-volume OCC solid. Zero sweep failures, zero decode failures.
 * **Volume cross-validates independently.** trimesh against the OCC kernel:
   max 9.25e-4 relative, median 6.3e-5, on shared-vertex (nodes, triangles)
-  arrays with `process=False` - the same convention `test_geometry.py` uses for
+  arrays with `process=False`, the same convention `test_geometry.py` uses for
   the triangle loft. NOT via STL: STL is a triangle soup with no shared
   vertices, so `is_watertight` is False for every closed solid until vertices
   are merged, and merging is a repair step a cross-validator must not perform.
-  An earlier version of the gate did use STL and reported 0% watertight - a
+  An earlier version of the gate did use STL and reported 0% watertight, a
   measurement bug, not a geometry result.
 * **The rotation-minimizing frame.** Double reflection (Wang et al. 2008), not
   Frenet. Verified against Frenet ON THE SAME CURVE: through an inflection
   Frenet's normal turns >90 deg between adjacent samples, RMF turns <1 deg.
   Also orthonormal to 1e-12 along a writhing spine, sampling-convergent, and
   refusing cusps as `SolverError` BEFORE the transport recurrence divides by a
-  zero segment length - a nan there would silently poison every later frame.
+  zero segment length, because a nan there would silently poison every later frame.
 
 ### Why it failed: the sampler, not the sweep
 
@@ -858,11 +858,11 @@ UNTESTED and is named in the resumption order below. The code path is kept.
 | unmeshable | 123 | 51.3 |
 
 All 123 meshing failures are one message: **`PLC Error: A segment and a facet
-intersect`** - tetgen refusing a SELF-INTERSECTING boundary. Mesh size does not
+intersect`**: tetgen refusing a SELF-INTERSECTING boundary. Mesh size does not
 help (tested at 0.8, 1.5 and 3.0 mm). All 22 winding failures have worst-penalty
 median 8.51, the same cause. **OCC does not check self-intersection**, so it
-happily returns a watertight solid whose boundary passes through itself;
-watertight is not valid.
+happily returns a watertight solid whose boundary passes through itself.
+Watertight is not valid.
 
 The geometric penalties predict the failures: worst penalty **1.449 median among
 passes vs 6.705 among failures** (p90 9.0 vs 31.7).
@@ -890,26 +890,26 @@ Both would have produced a confidently wrong number:
 
 1. **Self-intersection excluded a fixed 12 SAMPLES** of arc neighbourhood. At
    400 samples over ~0.1 m that is 3 mm, compared against a ~38 mm limit, so
-   every tube was flagged as intersecting ITSELF - a spurious 100%. The
+   every tube was flagged as intersecting ITSELF, a spurious 100%. The
    exclusion must be GEOMETRIC (a multiple of the local section radius),
-   because a tube legitimately occupies a neighbourhood of its own spine; a
+   because a tube legitimately occupies a neighbourhood of its own spine. A
    sample-count exclusion makes the answer depend on sampling density.
 2. **The RMF seed was built from the exact control-polygon tangent while the
    transport ran on the discrete sampled tangent**, leaving the first section
-   sheared - 1.8e-3 non-orthogonality at sample 0 against ~1e-16 everywhere
+   sheared: 1.8e-3 non-orthogonality at sample 0 against ~1e-16 everywhere
    else. The seed is now re-projected onto the tangent the recurrence uses.
 
 ### WITHDRAWN as evidence: the gamma_min usability result
 
 Of the 95 passes, 0 met the Phase-4a usability rule (gamma_min > 0.1 AND
-gamma_mean > 0.6); gamma_min median 0.0010, gamma_mean median 0.5668.
+gamma_mean > 0.6). gamma_min median 0.0010, gamma_mean median 0.5668.
 
 **That measurement is CONFOUNDED and is withdrawn as evidence against this
-family.** The gate meshed at a 1.5 mm target against a 0.2 mm trailing edge -
-7.5x coarser than the feature it had to resolve - which is exactly the Phase-4a
+family.** The gate meshed at a 1.5 mm target against a 0.2 mm trailing edge
+(7.5x coarser than the feature it had to resolve), which is exactly the Phase-4a
 sliver mechanism reproducing itself. It measures the mesh target, not the
 geometry, and it cannot distinguish a badly-swept blade from a well-swept one.
-It was originally reported as a caveat on the family's viability; that reading
+It was originally reported as a caveat on the family's viability. That reading
 was wrong.
 
 **The free-form negative rests solely on the 0/4000 feasible fraction**, which
@@ -921,21 +921,21 @@ stands on.
 ### The RMF seed convention was wrong, and the fix is measured
 
 The original seed projected the LOCAL RADIAL direction off the tangent. That is
-degenerate when the start tangent is parallel to the radial direction - exactly
+degenerate when the start tangent is parallel to the radial direction, exactly
 the tangent a blade leaving a hub cylinder has. It was not marginal: **that seed
 refused a straight radial spine, the canonical propeller, as a ValueError.**
 
 Re-seeded onto the rotation axis, `n0 = normalise(y_hat x t0)`. The direction
 was CHOSEN BY MEASUREMENT, not derived: three candidates share the identical
 degeneracy `|y_hat x t0|` and differ only in direction, and on a straight radial
-spine at fixed twist - the one configuration where the swept and radial
-representations must describe the same blade - only `y_hat x t0` reproduces
+spine at fixed twist (the one configuration where the swept and radial
+representations must describe the same blade) only `y_hat x t0` reproduces
 `PropellerDesign`'s section orientation, to **1.1e-13 m**. The other two sit at
-exactly **+90** and **+180 degrees**; either would have silently redefined twist
+exactly **+90** and **+180 degrees**. Either would have silently redefined twist
 for every loop design (`seed_equivalence.py`).
 
-Conditioning improved with it. The pre-declared criterion - p95 seed-normal
-wobble <= 1.0 deg under a 1e-3 * radius_m perturbation - was UNSATISFIABLE under
+Conditioning improved with it. The pre-declared criterion (p95 seed-normal
+wobble <= 1.0 deg under a 1e-3 * radius_m perturbation) was UNSATISFIABLE under
 the radial seed (best cell 1.524 deg) and had to be re-derived at 1e-4. Under the
 axis seed it is **met unmodified** (0.584 deg), because the seed no longer reads
 P0 and the perturbation loses one route in. Thresholds `SEED_M_MIN = 0.50`,
@@ -943,7 +943,7 @@ P0 and the perturbation loses one route in. Thresholds `SEED_M_MIN = 0.50`,
 
 ### Resumption order, if free-form is revisited
 
-1. **Bounded-turning-angle encoding** - the untested variant that directly
+1. **Bounded-turning-angle encoding**: the untested variant that directly
    addresses the dominant failure. Draw consecutive control points as bounded
    direction increments so the reachable curvature is bounded by the ENCODING
    rather than filtered by a penalty. This is the change that would test whether
@@ -961,31 +961,31 @@ numpy-only): centrifugal tension (stressing + stress-stiffening), static
 bending from the BEMT per-blade spanwise loads (`BEMTAeroSolver.
 spanwise_loads`, the aero->structure seam), extreme-fiber stress with a
 documented root stress-concentration guard (Kt=2.5, conservative placeholder
-until Phase-4 FEA calibrates it — **SUPERSEDED**, see "Phase 4a slice 3b/3c"
+until Phase-4 FEA calibrates it, now **SUPERSEDED**, see "Phase 4a slice 3b/3c"
 below: measured factors now amplify BOTH stress components), SF = yield/peak.
 Modal: first flapwise
 frequency with centrifugal stiffening + resonance margin vs blade-passing
-harmonics (currently REPORTED only; contract extension pending approval).
-Material is an explicit parameter — default PLA (E=3.5 GPa, yield=50 MPa,
-rho=1240 kg/m^3, typical filament-datasheet values); printed-PLA anisotropy
+harmonics (currently REPORTED only, contract extension pending approval).
+Material is an explicit parameter: default PLA (E=3.5 GPa, yield=50 MPa,
+rho=1240 kg/m^3, typical filament-datasheet values). Printed-PLA anisotropy
 is a documented isotropic first-pass simplification. Anchors
 (`tests/test_beam.py`): FE matches closed-form tip deflection (qL^4/8EI,
 nodally exact), centrifugal root tension (exact), and the uniform-cantilever
-first frequency (3.516 sqrt(EI/m L^4), rel 1e-4); f1 rises with rpm; SF falls
-with rpm and rises with chord; beam mass equals the lofted-solid mass exactly
+first frequency (3.516 sqrt(EI/m L^4), rel 1e-4). f1 rises with rpm. SF falls
+with rpm and rises with chord. Beam mass equals the lofted-solid mass exactly
 untwisted (<=5% twisted, measured ~3.7% worst). All four objectives are now
-physical; with real PLA strength the demo's max feasible thrust drops from
+physical. With real PLA strength the demo's max feasible thrust drops from
 ~46 N to ~13 N and the optimizer rides the SF=1 boundary.
 
 **Resonance constraint (landed):** `StructResult` carries `first_freq_hz`
-and `resonance_margin`; `radial_spec` enforces
-`resonance_margin >= resonance_margin_min` (default **0.15** — deliberately
+and `resonance_margin`. `radial_spec` enforces
+`resonance_margin >= resonance_margin_min` (default **0.15**, deliberately
 conservative because the first-pass beam f1 is itself uncertain: isotropic
-PLA, rigid hub, no fillet; revisit when Phase-4 FEA calibrates the modal
+PLA, rigid hub, no fillet, and revisit when Phase-4 FEA calibrates the modal
 model). Without it the optimizer parked 14/60 front designs inside the
-keep-out band (min margin 0.004); with it, 0/60 (min 0.170) at essentially
+keep-out band (min margin 0.004), whereas with it, 0/60 (min 0.170) at essentially
 unchanged thrust. **A2 coupling (known, unresolved):** rpm is a free design
-variable, so the optimizer satisfies resonance mainly by shifting rpm — the
+variable, so the optimizer satisfies resonance mainly by shifting rpm: the
 front's rpm range compressed from 3358-8403 to 3803-7798 under the
 constraint. Do not read structural meaning into rpm placement until A2 is
 decided. Null/geom-mass solvers carry documented ABSURD sentinels for the
@@ -996,61 +996,61 @@ non-binding so plumbing tests keep working.
 mass difference on twisted blades is a genuine geometry effect, not an
 integration inconsistency. The mass objective is computed on the FACETED
 TRIANGULATED LOFT (the actual printable artifact), which is therefore a
-slight CONSERVATIVE OVER-ESTIMATE of the smooth-blade mass — the triangles
+slight CONSERVATIVE OVER-ESTIMATE of the smooth-blade mass: the triangles
 chording the non-planar quads between rotated twisted sections enclose
 marginally more volume than the smooth extrusion. The beam model instead
 tracks the smooth ∫A dr limit, which is exactly twist-invariant. These are
 two legitimately different shapes: the effect is exactly zero untwisted,
 scales as O(dtheta^2) per element, and vanishes under station refinement.
-KNOWN AND EXPECTED, not a bug — documented here and in
+KNOWN AND EXPECTED, not a bug, documented here and in
 `tests/test_beam.py::test_mass_consistency_with_geometry`.
 
-### A2 — RESOLVED in Phase 2c (Path 2): rpm is now solved, not free
+### A2, RESOLVED in Phase 2c (Path 2): rpm is now solved, not free
 The resonance constraint is satisfiable two ways: stiffen the blade, or move
 the excitation frequency by changing rpm. While rpm was a free design
-variable (A2 open), NSGA-II took the cheap path — enabling the constraint
+variable (A2 open), NSGA-II took the cheap path: enabling the constraint
 compressed the front's rpm distribution (8-10k bucket emptied, median
 6940 -> 6552 rpm) at ~zero objective cost rather than forcing stiffer blades.
 Phase 2c resolves this: rpm LEAVES the genome and is solved from the
-motor-propeller torque equilibrium (see "Phase 2c" below); **throttle**
+motor-propeller torque equilibrium (see "Phase 2c" below), and **throttle**
 (the operating variable the pilot actually commands) replaces it. The
 optimizer can no longer slide rpm independently of a physical motor/blade
-pairing — full before/after evidence is in the Phase 2c section.
+pairing: full before/after evidence is in the Phase 2c section.
 
 **Resonance model scope limits (documented, not solved):** the margin checks
 only blade-passing harmonics n=1..3 against the first flapwise mode. There is
 no 1P/shaft-order excitation term, no forward-flight forcing (consistent with
 BEMT's static/hover scope), and no damping or forced-response amplitude
-estimate — it is a frequency keep-out band, not a vibration prediction. A
+estimate: it is a frequency keep-out band, not a vibration prediction. A
 full Campbell diagram (multiple modes, all excitation orders, vs. rpm) is
 Phase-4 material once solid FEA is in the loop.
 
 ## Phase 2c (checkpoint): motor-propeller torque equilibrium (A2, Path 2)
 `motor.py` adds a first-order brushless-DC model (`MotorSpec`: KV, Rm, I0,
-V_max, I_max) and solves the operating point. rpm LEAVES the genome; the last
+V_max, I_max) and solves the operating point. rpm LEAVES the genome. The last
 slot becomes **throttle in [0.2, 1]** and `radial_spec.decode` solves the
 speed N where motor torque equals propeller torque
-(`Q_motor(N)=Kt((V-N/KV)/Rm - I0)`, linear decreasing; `Q_prop(N)` from BEMT,
+(`Q_motor(N)=Kt((V-N/KV)/Rm - I0)`, linear decreasing, and `Q_prop(N)` from BEMT,
 rising) via a hand-rolled **Brent** root-find on [floor, no-load speed]. rpm
 stays a `PropellerDesign` field (now computed), so contracts.py and
 optimize.py are untouched: the equilibrium runs inside the `decode` closure,
 which binds `MotorSpec` + a shared BEMT solver. `motor=None` restores the
 pre-2c free-rpm genome (used by the plumbing/geometry/resonance tests).
 
-Feasibility (bred away, never crashes): **(b) over-current** — an equilibrium
-exists but the current it draws exceeds I_max — is a bundled `Constraint`
-(g <= 0); at equilibrium `Q_prop == Q_motor`, so the current is recovered
+Feasibility (bred away, never crashes): **(b) over-current** (an equilibrium
+exists but the current it draws exceeds I_max) is a bundled `Constraint`
+(g <= 0). At equilibrium `Q_prop == Q_motor`, so the current is recovered
 from `ev.torque_Nm` alone (`I = torque/Kt + I0`), fitting the `(ev, st)` seam
 with no signature change. **(c) no equilibrium** (motor too weak / throttle
 too low to bracket a crossing) raises `SolverError` from `decode` -> penalized
 by the optimizer, same discipline as the BEMT stall path.
 
 Default motor: **2216-class 950 KV on 3S** (Rm 0.10 Ohm, I0 0.6 A, 11.1 V,
-18 A limit) — representative of that datasheet class, not a specific SKU. It
+18 A limit), representative of that datasheet class, not a specific SKU. It
 materially sets the achievable rpm band (no-load ~10.5k rpm) and hence the
-whole front; swapping it is the intended way to study a different power
+whole front. Swapping it is the intended way to study a different power
 system. First-order model OMITS thermal/Rm-drift, magnetic saturation, ESC
-timing/PWM below a few % throttle — the current constraint uses I_max as the
+timing/PWM below a few % throttle: the current constraint uses I_max as the
 lumped proxy.
 
 Cost: the root-find calls BEMT (Brent ~6 solves) plus `evaluate` and beam's
@@ -1058,14 +1058,14 @@ Cost: the root-find calls BEMT (Brent ~6 solves) plus `evaluate` and beam's
 `BEMTAeroSolver._converged_state`, with one BEMT instance shared across
 decode/aero/beam, reuses the last solve: **~7 BEMT/candidate with the memo,
 8 without, vs 2 pre-2c** (~3.5x). Anchors (`tests/test_motor.py`): Kt =
-9.5493/KV; zero-prop-torque equilibrium == no-load speed; stall torque; the
+9.5493/KV. Zero-prop-torque equilibrium == no-load speed. Stall torque. The
 equilibrium against an analytic Q=kN^2 prop matches the hand-solved quadratic
-root (BEMT-independent); efficiency Q.omega/VI < 1; monotonic throttle->N and
-blade->N; over-current and no-equilibrium flagged, not crashed.
+root (BEMT-independent). Efficiency Q.omega/VI < 1. Monotonic throttle->N and
+blade->N. Over-current and no-equilibrium flagged, not crashed.
 
 **A2 made visible (demo, seed 0, 60/60):** with the motor coupling, **every**
-front design de-rates throttle (0/60 at full throttle; throttle 0.36-0.85,
-median 0.65) — throttle is the relief valve rpm used to be. Equilibrium rpm
+front design de-rates throttle (0/60 at full throttle, throttle 0.36-0.85,
+median 0.65): throttle is the relief valve rpm used to be. Equilibrium rpm
 spans 3.3-7.6k (motor-bounded, not the free 2-12k), the current constraint
 BINDS at the high-thrust edge (max 17.9 A vs 18 A limit), and peak feasible
 thrust drops **13.3 N -> 9.4 N** vs the free-rpm front: the motor, not an
@@ -1073,8 +1073,8 @@ arbitrary rpm choice, now limits thrust. Objective values for over-current
 equilibria assume the ESC could supply the current (it can't) but are excluded
 from the feasible front, so they don't affect results.
 
-**What caps throttle — ANSWERED in Phase 3 (see below):** the constraint-
-activity breakdown shows most of the front (53/60) is constraint-INTERIOR —
+**What caps throttle, ANSWERED in Phase 3 (see below):** the constraint-
+activity breakdown shows most of the front (53/60) is constraint-INTERIOR:
 throttle is set by the objective trade-off, not a hard cap. Only the extremes
 bind: the min-thrust corner sits on thrust>=min, and the high-throttle corner
 approaches the SF and current limits jointly (throttle correlates +0.86 with
@@ -1082,84 +1082,84 @@ both g[SF] and g[current]).
 
 ## Phase 3 (checkpoint): config-driven runs, convergence, post-processing
 A run is fully specified by a `RunConfig` (frozen dataclass, `config.py`) +
-seed; `configs/default.py` constructs the default with each value's
+seed. `configs/default.py` constructs the default with each value's
 justification inline (the reason config is Python, not JSON). `build_run(cfg)`
-wires the existing radial_spec + solvers (sharing one BEMT so its memo helps);
-`run(cfg, seed)` calls the existing `optimize` — contracts.py and optimize.py
+wires the existing radial_spec + solvers (sharing one BEMT so its memo helps).
+`run(cfg, seed)` calls the existing `optimize`: contracts.py and optimize.py
 untouched. Runs are bit-reproducible from config+seed. Entry point:
 `python run_demo.py [--mode exploration|decision] [--seed N] [--out DIR] [--convergence]`.
 
-**Two run modes (differ ONLY in seed-handling; identical physics, bounds,
+**Two run modes (differ ONLY in seed-handling, identical physics, bounds,
 optimizer, constraints):**
-- **exploration** — a single seed, pop 60 / gen 40. For iteration and demos.
+- **exploration**: a single seed, pop 60 / gen 40. For iteration and demos.
   Exploration-grade: the convergence study measured ~25% single-seed final-HV
   spread, so exact front edges carry seed noise.
-- **decision** — aggregates a configured seed list (default 5) by merging their
+- **decision**: aggregates a configured seed list (default 5) by merging their
   feasible archives into ONE cross-seed non-dominated front (union of all
-  designs, then keep the cross-seed Pareto set — an actual aggregated front
+  designs, then keep the cross-seed Pareto set, an actual aggregated front
   that export/plot/STL consume, NOT HV-averaging). Aggregation can only add
   coverage, so the aggregated HV is >= every constituent seed's HV.
-  `configs/default.py` exposes `exploration_config()` and `decision_config()`;
-  `decision_config` is `replace(exploration, mode="decision")` — the split is
+  `configs/default.py` exposes `exploration_config()` and `decision_config()`.
+  `decision_config` is `replace(exploration, mode="decision")`: the split is
   literally the mode field. `analysis.aggregate_front` reuses `run()` (the same
   optimize path the convergence study drives) over the seeds, then the pure
   `aggregate_results` merge. Every export's JSON `config` echo carries `mode`
   and `seeds`, so no output is ambiguous about its grade.
 
-**Convergence (`analysis.py`; slow test `tests/test_convergence.py`, run with
+**Convergence (`analysis.py`, slow test `tests/test_convergence.py`, run with
 `pytest -m slow`).** Measured cost ~20 ms/candidate, so a 5-seed study at
 pop 60 x gen 40 = 12k evals ~ 4 min fits a <=5 min budget. Hypervolume is
 computed on the CUMULATIVE feasible non-dominated archive (monotonic by
-construction — the right convergence metric; the current-population front is
+construction, the right convergence metric, while the current-population front is
 not) against a FIXED reference: objectives are mapped to a common [0,1] loss
 using per-objective ideal/nadir bounds held constant in the config (thrust
 15/1.5 N, FoM 1/0, mass 0/0.035 kg, SF 10/0.8), ref point = 1. These bounds
-bracket every feasible front so HV is comparable across seeds/gens — they are
+bracket every feasible front so HV is comparable across seeds/gens: they are
 normalization constants, not physical targets, and the nadir sits just outside
 the feasible boundary so no feasible design maps to loss 1. Result (5 seeds):
 HV rises monotonically within every seed, reaching 99% of its gen-40 value by
-~gen 37 but still creeping ~1-3%/10gen; final-HV mean ~0.075, seed rel-spread
-~25% (re-measured after the 7 mm chord bound; was ~18% at the 5 mm bound).
-**Verdict: near-converged but seed-dependent** — a single-seed front is
-exploration-grade; for decision-grade, aggregate >=5 seeds or raise pop.
+~gen 37 but still creeping ~1-3%/10gen, and final-HV mean ~0.075, seed rel-spread
+~25% (re-measured after the 7 mm chord bound, was ~18% at the 5 mm bound).
+**Verdict: near-converged but seed-dependent**: a single-seed front is
+exploration-grade. For decision-grade, aggregate >=5 seeds or raise pop.
 **Recommendation: pop 60 / gen 40** (baked into `default.py`) as the
 budget-fitting near-converged setting.
 
 > **Re-measured under the corrected root Kt** (see "Phase 4a slice 3b/3c"):
 > seed rel-spread fell 25% -> 12.2% and final-HV mean 0.075 -> 0.059. pop 60 /
-> gen 40 is retained; the HV bounds above still bracket the new front.
+> gen 40 is retained. The HV bounds above still bracket the new front.
 
 **Constraint activity (the open 2c question, answered).** Each Pareto design's
 g-vector is classified binding / slack / violated with a per-constraint
 tolerance = 2% of that constraint's own threshold scale (SF->1, thrust->
-min_thrust, resonance->margin_min, current->1; a single absolute tol would be
+min_thrust, resonance->margin_min, current->1, because a single absolute tol would be
 meaningless across differently-scaled g's). Across the seed-0 front: 53/60
-designs are fully interior (all constraints slack); only 7/60 bind any
+designs are fully interior (all constraints slack). Only 7/60 bind any
 constraint. **What caps throttle:** the low-throttle end (0.36) is capped by
-thrust>=min (can't de-rate below 2 N); the high-throttle end (0.85) is jointly
-bounded by SF and motor-current (both correlate +0.86 with throttle; the
+thrust>=min (can't de-rate below 2 N). The high-throttle end (0.85) is jointly
+bounded by SF and motor-current (both correlate +0.86 with throttle, the
 max-thrust design sits at SF 1.37, I 17/18 A) but is not tightly binding at
-2% tol; the bulk of the front is set by the four-way objective trade-off, not
+2% tol. The bulk of the front is set by the four-way objective trade-off, not
 a hard cap. So the answer is "a mix, and mostly not a hard constraint."
 
-**Export + plotting.** The front exports to JSON (`export.py`) — chosen over
+**Export + plotting.** The front exports to JSON (`export.py`), chosen over
 CSV because each record is nested/heterogeneous (variable-length decision
-vector + objectives + constraint name->g map + activity map); JSON keeps it
+vector + objectives + constraint name->g map + activity map). JSON keeps it
 self-describing with the config echo, activity summary, and convergence in one
 re-readable file. The four objective-corner designs (max thrust / max FoM /
 min mass / max safety) export as watertight ASCII STL. Plotting (`plotting.py`)
 provides a pairwise objective scatter matrix and a parallel-coordinates plot,
 with constraint-binding designs distinguished, saved via the non-interactive
 Agg backend. **matplotlib is an OPTIONAL extra** (`pip install -e '.[plot]'`),
-imported lazily; absent, plotting raises a clear message and the run still
+imported lazily. If absent, plotting raises a clear message and the run still
 produces its JSON/STL. Core runtime deps stay `["numpy", "pymoo>=0.6"]`.
 
 **Grade of earlier-phase numbers (retroactive honesty).** Every front shown in
-earlier phases — the Phase-2c demo, the A2 before/after (13.3->9.4 N, throttle
-0.36-0.85, current 17.9/18 A), and the 2c/3 constraint-activity breakdown —
+earlier phases, the Phase-2c demo, the A2 before/after (13.3->9.4 N, throttle
+0.36-0.85, current 17.9/18 A), and the 2c/3 constraint-activity breakdown,
 was produced by a SINGLE seed, i.e. exploration-grade. The qualitative
-conclusions hold (rpm is motor-bounded; throttle is the relief valve; the
-front is largely constraint-interior; peak thrust drops under the motor
+conclusions hold (rpm is motor-bounded, throttle is the relief valve, the
+front is largely constraint-interior, peak thrust drops under the motor
 coupling), but the exact quantitative edges carry the ~25% single-seed HV
 noise. Decision-grade numbers require the aggregated multi-seed front (decision
 mode). Read prior single-seed figures as representative, not final.
@@ -1169,35 +1169,35 @@ mode). Read prior single-seed figures as representative, not final.
 Purpose: prove the mesher -> deck-writer -> runner -> parser chain end to end on
 ONE design, and find out whether meshing the triangle loft will fight us. No
 modal, no robustness sweep, no Kt calibration in this slice. `hf/` is a
-VALIDATOR path — `CalculiXStructSolver` implements `StructSolver` so it can be
+VALIDATOR path: `CalculiXStructSolver` implements `StructSolver` so it can be
 compared like-for-like against the beam, but it is never wired into
 `optimize.py` (seconds-to-minutes per case vs ~20 ms for a whole reduced
 evaluation).
 
 Toolchain (see `hf/SOURCE.md`): **CalculiX 2.21** via WSL2 + Debian
 `calculix-ccx`, **gmsh 4.15.2** via pip under the `hf` extra. `ccx` is a system
-binary and cannot be a pip dependency; core deps remain
+binary and cannot be a pip dependency. Core deps remain
 `["numpy","pymoo>=0.6"]`. The Windows<->WSL boundary is text-only and lives in
 one module (`hf/wsl.py`) because OpenFOAM reuses it in 4b: Python writes the
 INP, ccx reads it and writes `.dat`/`.frd`, Python parses. Binary location is
-configurable (arg / `$PROPOPT_CCX` / WSL PATH / Windows PATH) — no hardcoded
-distro or versioned path. **All decks are strict SI** (m, kg, s, N, Pa); the
+configurable (arg / `$PROPOPT_CCX` / WSL PATH / Windows PATH), no hardcoded
+distro or versioned path. **All decks are strict SI** (m, kg, s, N, Pa). The
 STL is already metres and nothing rescales it.
 
-### Closed-form anchors (prismatic bar, not the blade) — `tests/test_hf_anchors.py`
+### Closed-form anchors (prismatic bar, not the blade): `tests/test_hf_anchors.py`
 | anchor | closed form | converged FE | note |
 |---|---|---|---|
-| cantilever tip deflection | `qL^4/8EI` | **-0.46%** at 16k tets | converging (-0.79/-0.55/-0.52/-0.46%); lands *below* beam theory because a fully clamped 3-D face also suppresses Poisson contraction and warping |
+| cantilever tip deflection | `qL^4/8EI` | **-0.46%** at 16k tets | converging (-0.79/-0.55/-0.52/-0.46%), landing *below* beam theory because a fully clamped 3-D face also suppresses Poisson contraction and warping |
 | rotating-bar axial stress | `0.5*rho*omega^2*(R^2-z^2)` | **within ~1%** at 0.2R and 0.5R | sampled against the analytic profile away from the clamp, so no clamp artifact |
 
 Wall-clock (order-2 tets, one static case): 1k tets ~3 s, 5k ~11 s, 9k ~19 s,
-16k ~37-53 s, 101k ~4.3 min. **ccx dominates; meshing is 0.1-14 s.** This is the
+16k ~37-53 s, 101k ~4.3 min. **ccx dominates, and meshing is 0.1-14 s.** This is the
 number that sizes every later HF cost estimate.
 
 ### The blade (decision-mode max-thrust champion, front index 93 of 226)
 thrust 10.439 N, rpm 8537, SF_beam 1.293, mass 16.40 g, chord 17.0-29.9 mm.
 
-**4.1 centrifugal only** — an exact comparison (both models compute it
+**4.1 centrifugal only**: an exact comparison (both models compute it
 independently, no load mapping involved). Compared as section-integrated axial
 force `N = (1/t) * sum(sigma_zz,e * V_e)` over a slab off the clamp, which is
 volume-weighted and therefore directly comparable to the beam's `N`:
@@ -1225,19 +1225,19 @@ conserves total force exactly: 5.2194 N/blade x 2 = 10.439 N vs the front's
 
 **THIS COMPARISON IS PARTIAL AND IS NOT A CALIBRATED Kt.** The current geometry
 has no root fillet and no hub body, so the FEA resolves concentration from the
-section shape and the clamped face only — not the fillet effect that usually
-dominates real root concentration. The 1.16x therefore does NOT refute Kt=2.5;
-it measures a different, smaller set of mechanisms. Two further error sources
+section shape and the clamped face only, not the fillet effect that usually
+dominates real root concentration. The 1.16x therefore does NOT refute Kt=2.5.
+It measures a different, smaller set of mechanisms. Two further error sources
 belong to neither model: the band-traction mapping (the beam applies each
-station's load as a point resultant on the beam axis; the FEA smears it over
+station's load as a point resultant on the beam axis, while the FEA smears it over
 that band's wetted surface), and mesh quality at the trailing edge. Note also
-that peak von Mises does not converge monotonically (16.8 / 16.3 / 17.9 MPa) —
-it is a local extremum on a sliver-prone mesh — whereas the root-band value is
+that peak von Mises does not converge monotonically (16.8 / 16.3 / 17.9 MPa),
+because it is a local extremum on a sliver-prone mesh, whereas the root-band value is
 stable to ~1.5% (14.61 / 14.56 / 14.82). **Use the root-band metric, not the raw
 peak, for cross-fidelity comparison.**
 
 ### Verdict: is meshing the triangle loft viable?
-**Viable but not as-exported — and the blocker is geometric, not a resolution
+**Viable but not as-exported, and the blocker is geometric, not a resolution
 problem.** Three findings:
 
 1. **The trailing edge is a knife edge.** The default section closes the TE
@@ -1245,13 +1245,13 @@ problem.** Three findings:
    zero thickness along the whole TE. Sliver tets there are unavoidable:
    `gamma_min = 0.000` at EVERY grid and target size tried, and the 1st
    percentile stays <= 0.08 even when the mean reaches 0.72. Refinement does
-   not fix it; it only shrinks the slivers. It also drives runaway refinement —
+   not fix it. It only shrinks the slivers. It also drives runaway refinement:
    with gmsh's default min-size of target/5, the "fine" blade grid exploded to
-   a 33 MB deck; clamping `min_size_m = target_size_m` fixed that.
+   a 33 MB deck. Clamping `min_size_m = target_size_m` fixed that.
 2. **The as-exported surface is too coarse and too anisotropic to mesh.** The
    loft writes 6 stations x 25 chordwise points (764 facets), i.e. ~1 mm
    chordwise vs ~15 mm spanwise triangles. Preserve mode cannot refine past
-   that boundary (1,250 tets, `gamma_mean = 0.125` — unusable for stress), and
+   that boundary (1,250 tets, `gamma_mean = 0.125`, unusable for stress), and
    remesh mode fails outright: `classifySurfaces` cannot form closed loops
    across the knife edges ("1D mesh seems not to be forming a closed loop").
    **Densifying the surface sampling of the same parametric design is what
@@ -1263,7 +1263,7 @@ problem.** Three findings:
    In preserve mode the meshed volume matches the loft's divergence-theorem
    volume to **5.3e-9 relative**, and that residual is entirely the ASCII-STL
    `%.6e` text precision (recomputing the as-written surface reproduces the
-   mesh volume exactly) — the mesher does not move the boundary at all.
+   mesh volume exactly): the mesher does not move the boundary at all.
 
 So meshing is **not** the Phase-4 bottleneck by cost (0.1-14 s vs 12-256 s for
 ccx), but it IS a correctness risk until the knife edge is addressed. Two
@@ -1277,7 +1277,7 @@ suspect.
 
 Modal is out of scope this slice: `CalculiXStructSolver` returns the same kind
 of unmistakable sentinels `null.py` uses for `first_freq_hz` / `resonance_margin`
-(1e9 Hz / 1e6) — **they are not real values**.
+(1e9 Hz / 1e6): **they are not real values**.
 
 ## Finite trailing-edge thickness (adopted, 0.4 mm default)
 
@@ -1292,34 +1292,34 @@ outright ("1D mesh seems not to be forming a closed loop").
 adds a cubic-smoothstep wedge aft of max thickness:
 `u = clip((x-x_tmax)/(1-x_tmax),0,1)`, `S(u) = 3u^2-2u^3`, `y_up += (te/2)S`,
 `y_lo -= (te/2)S`. `S(0)=S'(0)=0` leaves everything forward of max thickness
-bit-for-bit untouched and joins C1 with no kink; `S(1)=1` hits the requested
-thickness exactly; `S'(1)=0` meets the blunt face tangentially. Absolute rather
+bit-for-bit untouched and joins C1 with no kink. `S(1)=1` hits the requested
+thickness exactly. `S'(1)=0` meets the blunt face tangentially. Absolute rather
 than %-chord because the floor is a manufacturing limit, and a percentage would
-leave the small-chord tip stations knife-edged — exactly where meshing is worst.
+leave the small-chord tip stations knife-edged, exactly where meshing is worst.
 
 Topology: the TE point becomes a short flat FACE, so the section polygon gains
 one vertex (P = 2k-2 -> 2k-1) and each cap's final column becomes a real quad
 instead of a degenerate triangle. `te_thickness_m = 0.0` runs the original code
 path and is **bitwise** inert (volume, vertices, faces all identical).
 
-**Adopted default: `te_thickness_m = 4.0e-4` (0.40 mm)** — one nozzle/extrusion
+**Adopted default: `te_thickness_m = 4.0e-4` (0.40 mm)**: one nozzle/extrusion
 width is the FDM manufacturing floor, and it is where mesh quality resolves
 (`gamma_min` 0.000 -> 0.074, `gamma_p01` <= 0.08 -> 0.496, `gamma_mean` 0.72 ->
 0.813) without the mass cost of 0.5 mm. It also **unblocks gmsh remesh mode**,
 which now succeeds on the as-exported 764-facet STL (~96k tets, -0.17% volume
-drift) — so the HF path no longer needs densified re-sampling. Preserve mode
-remains poor regardless of TE; that is a surface-sampling problem, a separate
+drift), so the HF path no longer needs densified re-sampling. Preserve mode
+remains poor regardless of TE. That is a surface-sampling problem, a separate
 issue from the knife edge.
 
 `chord_bounds` lower bound raised **5 mm -> 7 mm** to match: the geometry guard
 rejects chord < te/(0.5*0.12) = 6.67 mm, and a 0.4 mm TE on a 5 mm chord is 8%
-of chord — a wedge, not a propeller section. At 7 mm the TE is <= 5.7% of chord
+of chord, a wedge, not a propeller section. At 7 mm the TE is <= 5.7% of chord
 everywhere. Failed evaluations per run: 17 (pre-TE) -> 40 (TE at 5 mm bounds)
 -> **10** (TE at 7 mm bounds).
 
 ### Known limitation: blunt-TE base drag is NOT in the aero model
 The geometry now has a finite trailing edge, but the BEMT polars are XFOIL runs
-on a **sharp-TE** NACA 4412 and cannot represent **base drag** — the pressure
+on a **sharp-TE** NACA 4412 and cannot represent **base drag**: the pressure
 deficit behind a blunt TE. BEMT is therefore **optimistic on drag by an
 unquantified amount that scales with te/chord**, which at the adopted default
 runs 1.6% of chord at the 25 mm root to 5.7% at the 7 mm tip station. Part of
@@ -1343,21 +1343,21 @@ twisted genomes. Fixed with an exact decomposition, not a tuned correction:
   `mean(c^2) = (ci^2+ci*cj+cj^2)/3`, `mean(c) = (ci+cj)/2`. `k_area` is taken
   from the POLYGON (not the analytic `0.5*(1-x_tmax)`), so the beam stays
   consistent with the loft, which is the faceted polygon and the mass of record.
-- **The second moment I has NO closed form** — and this is a real
+- **The second moment I has NO closed form**, and this is a real
   distinction, not just more work. `I_centroidal = I0 - Q^2/A`, and with a
   blunt TE, `I0`, `Q`, `A` are polynomials in chord of DIFFERENT degrees, so
-  their combination is a RATIONAL function of chord, not a polynomial; no
+  their combination is a RATIONAL function of chord, not a polynomial. No
   finite span-average formula exists. The centroid-shift term `A*ybar^2` is
   ~51% of `I0` for this section, so it cannot be dropped to force a
   polynomial either. Used instead: **3-point Gauss-Legendre** quadrature on
   pointwise-exact values per element. This is exact to degree 5, and the
   sharp-TE case is exactly quartic in chord, so the sharp-TE closed form is
-  reproduced EXACTLY (measured rel err 0.00e+00), not merely approximated;
-  the rational blunt-TE correction is resolved to ~2.9e-11 against a
+  reproduced EXACTLY (measured rel err 0.00e+00), not merely approximated.
+  The rational blunt-TE correction is resolved to ~2.9e-11 against a
   20-point reference.
 - **Residual, kept separate from the averaging fix (as it should be):**
   +0.128% between the polygon's numerical `k_area` and the analytic
-  `0.5*(1-x_tmax)` — this is n_chord=25 faceting the beam deliberately
+  `0.5*(1-x_tmax)`: this is n_chord=25 faceting the beam deliberately
   inherits to match the loft, not an averaging error, and it does not
   change with this fix.
 
@@ -1367,33 +1367,33 @@ every count (e.g. 2.51% vs 3.40% at n=4 stations).
 
 **Impact on results is small, and corrects the direction, not just the
 magnitude.** Across the exploration front (60/60 designs, seed 0) the
-trapezoidal error was NOT optimistic on safety factor — it was mildly
+trapezoidal error was NOT optimistic on safety factor, but it was mildly
 CONSERVATIVE: SF rose (never fell) by up to +2.80% (median +0.16%) under the
 exact fix, because the old over-estimated area over-estimated centrifugal
-tension and therefore stress. `f1` shifted -1.70% to +0.87% (median -0.48%);
-the negative shifts move toward resonance, which is the one genuinely
+tension and therefore stress. `f1` shifted -1.70% to +0.87% (median -0.48%).
+The negative shifts move toward resonance, which is the one genuinely
 non-conservative direction here, but no design changed feasibility on either
-SF (>=1) or the resonance-margin constraint (>=0.15) at the current bounds —
+SF (>=1) or the resonance-margin constraint (>=0.15) at the current bounds:
 0 infeasible under either formulation, 0 newly infeasible.
 
 **Exported fronts on disk predate this fix.** `runs/decision/front.json` and
 `runs/my_run/front.json` (gitignored, not part of this commit) were produced
-before the exact-averaging correction landed; a fresh decision-mode run would
-differ slightly — mainly a small relaxation of SF near the constraint
+before the exact-averaging correction landed. A fresh decision-mode run would
+differ slightly: mainly a small relaxation of SF near the constraint
 boundary, per the shifts above. Re-run `run_demo.py` for figures that reflect
 the corrected beam.
 
 ## Phase 4a slice 2: OCC B-rep geometry for the HF path
 
-A fillet is a B-rep operation — it cannot be applied to a triangle mesh — so the
+A fillet is a B-rep operation (it cannot be applied to a triangle mesh), so the
 root-fillet work needs a real CAD solid. `hf/occ_geometry.py` builds the blade
 with gmsh's **bundled** OpenCASCADE kernel (`gmsh.model.occ`): no new dependency,
 no STEP round-trip, and gmsh meshes the B-rep natively so there is no STL
 intermediate.
 
 **Two representations of the same design, and which is of record.** The
-optimizer keeps using the triangle loft, which remains the **mass of record**;
-the HF path uses the OCC solid. They are not different blades — they are the
+optimizer keeps using the triangle loft, which remains the **mass of record**.
+The HF path uses the OCC solid. They are not different blades: they are the
 same station data at different discretization orders, converging to the same
 smooth swept limit:
 
@@ -1411,7 +1411,7 @@ dominated by the LOFT's first-order error, not by an OCC defect.
 **Measured fidelity band** over 20 designs spanning the genome bounds
 (te = 0.4 mm): median **-0.0000%**, worst **1.52%**, range -1.52% .. +0.95%,
 **0/20 lofting failures**, ~0.12-0.19 s per construction. The difference is
-driven by spanwise twist VARIATION and nothing else — with constant twist (any
+driven by spanwise twist VARIATION and nothing else: with constant twist (any
 value) or taper-only, OCC and the loft agree to **0.000000%**, which is what
 proves sections, stations, TE treatment, placement and caps are genuinely
 shared rather than merely similar. (Note the sign: the loft is LARGER than
@@ -1419,41 +1419,41 @@ smooth, consistent with the Phase-2b measurement that the triangulated loft
 encloses more volume than the smooth extrusion.)
 
 **Why the band does not propagate into the optimizer.** The HF path exists to
-extract a DIMENSIONLESS ratio — a stress-concentration factor Kt — not absolute
+extract a DIMENSIONLESS ratio (a stress-concentration factor Kt), not absolute
 stresses. A ratio taken within one representation is insensitive to a global
 volume offset between representations. More specifically, the root is exactly
 identical between the two: station 0 is a design station (the hub end-extension
 holds chord and twist constant), so the root element's ruled patch is untwisted
 and OCC and the loft agree there **exactly**. Measured on a high-twist design,
 the root element carries **0.0%** of the total volume difference while holding
-15.3% of the volume; the whole gap is mid-span (elements 1-5, -1.12% to -1.20%
+15.3% of the volume. The whole gap is mid-span (elements 1-5, -1.12% to -1.20%
 each). Root cross-section area agrees analytic == loft cap == OCC kernel face to
 **4.4e-16** relative. Kt is therefore read from geometry that is common to both.
 
 **Sharp trailing edges are unsupported in the HF path.** `te_thickness_m = 0`
 gives a CUSPED profile wire (upper and lower surfaces meeting at zero included
-angle) — the degeneracy a B-rep kernel handles worst, and the same one that made
+angle), the degeneracy a B-rep kernel handles worst, and the same one that made
 gmsh's STL remesh mode fail outright in the first 4a slice. Rather than leave it
 to fail deep inside OCC with an opaque message, `station_rings` raises
 `SolverError` up front. The adopted 0.4 mm default avoids it.
 
 ### Fillet geometry validation (slice 3a)
 
-**`occ.getMass` is unreliable on a filleted solid; the mesh is authoritative.**
+**`occ.getMass` is unreliable on a filleted solid. The mesh is authoritative.**
 It is exact on the FUSED solid (agrees with a converged tet mesh to ~3e-6
 relative) but wrong once the junction is filleted. Two independent proofs that
 this is an artifact rather than real material: the implied dV depends on the
 HUB PLATE SIZE (+31.26 mm^3 on a 2.0x1.0-chord plate vs +12.67 mm^3 on a
-1.0x0.4 plate — same blade, same junction, same radius, and a *local* fillet
+1.0x0.4 plate, same blade, same junction, same radius, and a *local* fillet
 cannot do that), and the wrong value survives a BREP write and re-read in a
 fresh session, so it is baked into the shape rather than stale session state.
-`build_filleted` therefore returns it as `occ_volume_m3_unreliable`; anything
+`build_filleted` therefore returns it as `occ_volume_m3_unreliable`. Anything
 needing a volume must mesh. A guard test asserts the plate-size dependence, so
 if a future gmsh/OCC fixes this the test fails loudly.
 
 **The blend itself is geometrically correct.** Measured from the surface mesh
 by cutting planes perpendicular to the junction and fitting a circle through
-the blend quadrant — a procedure first validated on a box-on-plate control,
+the blend quadrant, a procedure first validated on a box-on-plate control,
 where it recovers the requested radius exactly:
 
 | station | r = 0.100 mm | r = 0.200 mm |
@@ -1464,7 +1464,7 @@ where it recovers the requested radius exactly:
 | blade LE region | 0.08794 (-12.1%) | 0.17298 (-13.5%) |
 
 **No trailing-edge collapse**: even at r = 0.200 mm = te_thickness_m/2 exactly
-— the theoretical limit where the upper and lower blends meet — the near-TE
+(the theoretical limit where the upper and lower blends meet) the near-TE
 station still fits the requested radius to 0.00%. The leading-edge fit reads
 12-14% low, but that is a MEASUREMENT artifact of fitting a circle across a
 sharply curved junction (nose radius 0.473 mm vs r = 0.1-0.2 mm), not real
@@ -1483,7 +1483,7 @@ the hub out to the first design station):
 | TE (u >= 0.75) | 0.1264 mm^3 | 25.4% | 0.95x |
 | **total** | **0.4974 mm^3** | | **0.94x** |
 
-There is no dV excess anywhere — every band sits slightly BELOW the ideal
+There is no dV excess anywhere: every band sits slightly BELOW the ideal
 90-degree-corner law, as expected where the blade meets the plate at an obtuse
 angle. (An earlier coarse-mesh estimate of ~1.8x was itself mesh error: the
 fillet is 0.2 mm and that mesh was 1 mm, so the feature was smaller than one
@@ -1491,13 +1491,13 @@ element.)
 
 **The spline-profile junction path is rejected.** Replacing the faceted
 polyline profile with a closed BSpline gives only 2 junction curves instead of
-49, but their total length is 122.7 mm = exactly 2x the section perimeter — the
+49, but their total length is 122.7 mm = exactly 2x the section perimeter: the
 junction loop is represented TWICE. Its `getMass` dV goes negative (a concave
 fillet cannot remove material) and its mesh dV is +166 mm^3. The polyline
 profile is the sound route.
 
 **Method note carried forward:** never identify post-boolean entities by
-diffing tag sets — OCC re-tags modified entities, which silently corrupted an
+diffing tag sets: OCC re-tags modified entities, which silently corrupted an
 earlier audit (it reported a 1410 mm "blend radius" and a 46x-too-large face
 area). Query post-fillet entities fresh instead.
 
@@ -1510,7 +1510,7 @@ sigma_root = Kt_axial * (N/A) + Kt_bending * sigma_bend
 ```
 
 with both factors **measured**, looked up at each design's own root ratio
-`r/t`. The tables ship in `src/propopt/kt_root.py`; the instrument that
+`r/t`. The tables ship in `src/propopt/kt_root.py`. The instrument that
 produced them is `src/propopt/hf/kt2d.py` (needs gmsh + CalculiX, never
 imported by the optimizer loop).
 
@@ -1518,7 +1518,7 @@ imported by the optimizer loop).
 
 2-D plane strain, CPE6 quadratic triangles, unit depth. Wall of thickness `t`
 on a plate, circular fillet radius `r` (i.e. the stepped-flat-bar geometry).
-`bending` = pure moment (zero net force, zero shear); `axial` = uniform
+`bending` = pure moment (zero net force, zero shear). `axial` = uniform
 tension. Kt = max in-plane principal stress on the fillet arc / sigma_nom read
 from the wall itself. `sigma_nom` reproduced the elementary `6M/t^2` and `F/t`
 to **0.00% on every row**.
@@ -1539,19 +1539,19 @@ to **0.00% on every row**.
 
 ### Validation basis
 
-* **Kirsch anchor** — the same extraction, mesh strategy and consistent-load
+* **Kirsch anchor**: the same extraction, mesh strategy and consistent-load
   path run on a circular hole in a wide plate (exact Kt = 3.000) converges
   **monotonically from below**: -3.02% / -1.27% / -1.03% / -0.39% / **-0.19%**
   / -0.03% / +0.03% at `elem_across` = 4 / 6 / 8 / 12 / **16** / 24 / 32, with
   the element count growing throughout (23.4k -> 27.5k). The curves above are
   measured at `elem_across = 16`.
-* **Plate ratio saturated** — D/d = 4 / 6 / 8 / 12 give Kt within +/-0.05% of
+* **Plate ratio saturated**: D/d = 4 / 6 / 8 / 12 give Kt within +/-0.05% of
   one another. D/d = 8 is used.
-* **Consistent nodal loads** — 3-point Gauss over the quadratic edge (weights
+* **Consistent nodal loads**: 3-point Gauss over the quadratic edge (weights
   L/6, 2L/3, L/6). Tributary-length weighting is wrong for quadratic elements
-  and fails a uniform-tension patch test by tens of percent; that bug, not mesh
+  and fails a uniform-tension patch test by tens of percent. That bug, not mesh
   resolution, was what produced the earlier Kt = 0.71 reading.
-* **r/t = 0.01 is EXCLUDED** — it did not converge (Kt oscillated 4.08-4.78
+* **r/t = 0.01 is EXCLUDED**: it did not converge (Kt oscillated 4.08-4.78
   across the ladder while the element count barely grew). The table starts at
   0.020.
 
@@ -1559,14 +1559,14 @@ to **0.00% on every row**.
 
 The fillet radius is a **manufacturing intent, not a genome variable**:
 `RunConfig.root_fillet_radius_m`, default **0.20 mm**. The optimizer cannot
-trade it — it must not be able to buy safety factor by wishing for a bigger
+trade it: it must not be able to buy safety factor by wishing for a bigger
 blend. Two independent reasons for 0.20 mm: half a 0.40 mm extrusion width is
 the smallest blend an FDM tool path can lay, and it is exactly the slice-3a
 constructibility bound `min(local thickness)/2 = te/2` for the shipped 0.40 mm
 trailing edge, so the fillet is provably buildable on the real solid.
 
 `t` is the design's **computed** root thickness (max of the root section's own
-thickness distribution, read from `geometry.section_thickness` — the same seam
+thickness distribution, read from `geometry.section_thickness`, the same seam
 the loft and the hub-fillet bound use). Nothing is pinned to one design: across
 the 7-30 mm chord bounds the root lands at r/t = 0.056-0.238, always strictly
 inside the table.
@@ -1574,7 +1574,7 @@ inside the table.
 **What `te_thickness_m` moves, honestly:** it sets the constructibility bound
 exactly (`r_max = te/2`, reported per design as
 `BeamAnalysis.root_r_max_geom_m`). It does **not** move `t`, and therefore does
-not move Kt, anywhere in the admissible range — the TE wedge is a smoothstep
+not move Kt, anywhere in the admissible range: the TE wedge is a smoothstep
 that is C1-flat at the max-thickness station, so it only overtakes the section
 maximum at te/c ~ 0.07, and `geometry` already refuses te/c >= 0.06 as "a
 wedge, not an aerofoil". The crossover is unreachable by construction. That is
@@ -1588,18 +1588,18 @@ law (the form the data follows), and is monotone. The global power-law fits
 5.9% / 6.8% maximum error and are **deliberately not in the stress path**.
 
 **Out of range RAISES, it does not clamp.** Below 0.020 is exactly where the
-model failed to converge; above 0.500 the two face fillets collide (`r > t/2`
+model failed to converge. Above 0.500 the two face fillets collide (`r > t/2`
 is not a filleted wall). Both ends are validity limits, not sampling limits, so
 a clamped value would be a number that was never measured.
 
 ### What was wrong before
 
-`kt_root = 2.5` multiplied **only** `sigma_bend`; the centrifugal `N/A` was
+`kt_root = 2.5` multiplied **only** `sigma_bend`. The centrifugal `N/A` was
 left bare. Measured at the shipped root ratio r/t = 0.056:
 
 | term | old factor | measured | verdict |
 |---|---|---|---|
-| bending | 2.5 | **2.41** | placeholder was 4% conservative — a good guess |
+| bending | 2.5 | **2.41** | placeholder was 4% conservative, a good guess |
 | axial | **1.0** | **3.47** | the real gap: centrifugal tension unamplified |
 
 The bending placeholder was fine. The unamplified axial term was not: at the
@@ -1613,7 +1613,7 @@ patched in, so the **only** difference between the two fronts is the Kt
 composition. (`runs/decision/front.json` predates the 7 mm chord floor and
 cannot serve as a baseline.)
 
-**Same 229 designs, two stress models** — root r/t 0.0556-0.0923, Kt_axial
+**Same 229 designs, two stress models**: root r/t 0.0556-0.0923, Kt_axial
 2.84-3.48 (was 1.0), Kt_bending 2.01-2.42 (was 2.5):
 
 | | min | median | mean | max |
@@ -1622,7 +1622,7 @@ cannot serve as a baseline.)
 | SF after | 0.939 | 2.317 | 2.719 | 6.161 |
 | ratio | 0.693 | 0.808 | 0.844 | 1.128 |
 
-Median SF falls **19.2%**. Only **2 of 229** designs (0.9%) drop below SF = 1 —
+Median SF falls **19.2%**. Only **2 of 229** designs (0.9%) drop below SF = 1:
 the correction is a broad ~20% haircut, not a cliff. The `ratio > 1` tail is
 real: thin-rooted designs sit at higher r/t where the measured bending factor
 (2.01) is *below* the old 2.5 placeholder by more than the new axial term costs
@@ -1641,11 +1641,11 @@ them.
 rpm drops 7.7% (6345 -> 5856) and throttle 5.6%, while median mass *falls* 8.5%
 and chord barely moves (-3.3%). Centrifugal stress scales with omega^2, so
 under an amplified axial term the cheapest way to buy back safety factor is to
-spin slower — and the lost thrust is partly recovered with 7.4% more twist,
+spin slower, and the lost thrust is partly recovered with 7.4% more twist,
 which is why figure of merit *rises* 2.4%. The thrust ceiling is untouched
 (10.23 -> 10.30 N): the max-thrust corner was never SF-limited.
 
-**HV bounds still bracket the new front** — no rescaling needed:
+**HV bounds still bracket the new front**: no rescaling needed:
 
 | objective | ideal | nadir | new best | new worst | headroom to ideal | max loss |
 |---|---|---|---|---|---|---|
@@ -1654,11 +1654,11 @@ which is why figure of merit *rises* 2.4%. The thrust ceiling is untouched
 | mass_kg | 0.0 | 0.035 | 0.0040 | 0.0195 | 11.4% | 0.558 |
 | safety_factor | 10.0 | 0.8 | 6.3034 | 1.0000 | 40.2% | 0.978 |
 
-Every normalized loss lies strictly inside [0,1); **zero** points are pinned at
+Every normalized loss lies strictly inside [0,1). **Zero** points are pinned at
 the nadir. The SF nadir of 0.8 still sits just below the constraint floor as
-designed (worst feasible SF = 1.0000, loss 0.978 — tight but not clipped). The
+designed (worst feasible SF = 1.0000, loss 0.978, tight but not clipped). The
 SF ideal of 10 is now 40.2% away from the best achieved design, versus 19.0%
-before, so the SF axis carries more unused headroom than the other three; the
+before, so the SF axis carries more unused headroom than the other three. The
 bounds remain valid (they are normalization constants, not targets) but the SF
 dimension is now the least-exercised. HV falls 0.0919 -> 0.0654, which is the
 correct direction: the same search over a genuinely smaller feasible region.
@@ -1677,7 +1677,7 @@ re-measured rather than assumed (5 seeds):
 | 4 | 0.01859 | 0.05081 | 0.05358 | 0.05630 | yes | 5.1% |
 
 **Final-HV seed spread: 12.2%, down from 25.1%.** The seeds now agree with each
-other roughly twice as well — amplifying the axial term sharpened the feasible
+other roughly twice as well: amplifying the axial term sharpened the feasible
 region, so there is less for a seed to get lucky about. (`SEED_SPREAD_LIMIT` in
 `tests/test_convergence.py` tightened 0.35 -> 0.25 accordingly.)
 
@@ -1688,13 +1688,13 @@ hypervolume, with creep 24.3% / 11.7% / 4.6% / 5.2% / 2.5% / 2.9% / 1.9% per
 retained** as the exploration-grade setting: it is still the near-converged
 point that fits the <=5 min 5-seed budget, and its cross-seed agreement
 improved. Runs wanting the last ~10% of hypervolume should raise `n_gen` toward
-70-80; that is a config decision and was not made here, since changing it would
+70-80. That is a config decision and was not made here, since changing it would
 invalidate the fronts reported above.
 
 ### Outstanding
 
 * **3-D confirmation.** These are 2-D plane-strain numbers. Plane strain holds
-  at MID-CHORD, where the blade root is locally a long prismatic wall; near the
+  at MID-CHORD, where the blade root is locally a long prismatic wall. Near the
   leading and trailing edges the section is short chordwise and the true state
   approaches plane STRESS, which is not covered. Confirming the curve on the
   real filleted 3-D blade is the next structural step.
